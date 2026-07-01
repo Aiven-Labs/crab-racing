@@ -54,6 +54,7 @@
   <div id="lobby-inner">
     <h1>🦀 CRAB RACING</h1>
     <div class="sub">COASTAL SURVIVAL RACE</div>
+    <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
     <button id="btn-solo">Solo Race</button>
     <hr>
     <div id="multi-section">
@@ -216,24 +217,72 @@ function drawNet(ctx) {
       px(ctx, x, y, '#d0a850');
 }
 
-// ─── obstacle definitions ──────────────────────────────────────────────────────
-const OBSTACLES = [
-  { cell: 7,  lane: 0, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'    },
-  { cell: 9,  lane: 2, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
-  { cell: 11, lane: 1, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'    },
-  { cell: 15, lane: 1, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
-  { cell: 17, lane: 0, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
-  { cell: 19, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
-  { cell: 22, lane: 1, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
-  { cell: 26, lane: 0, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
-  { cell: 28, lane: 2, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
-  { cell: 30, lane: 1, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
-  { cell: 33, lane: 0, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
-  { cell: 36, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
-  { cell: 39, lane: 1, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
-  { cell: 41, lane: 0, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+// ─── obstacle generation ───────────────────────────────────────────────────────
+// Obstacles are placed procedurally from a seed so that every race gets a fresh
+// but fair layout. The server is authoritative in multiplayer and shares its seed
+// with all clients (via the 'joined'/'go' messages) so everyone renders and
+// simulates the exact same track. Solo races seed from the lobby (custom or random).
+//
+// IMPORTANT: this generator must stay byte-for-byte identical to the one in
+// server.js — the same seed must produce the same obstacles on both sides.
+const OBSTACLE_KINDS = [
+  { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
+  { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+  { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
+  { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
+  { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
 ];
-const OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
+
+// xmur3 string hash → 32-bit int (lets custom seeds be arbitrary strings)
+function hashSeed(str) {
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  h = Math.imul(h ^ (h >>> 16), 2246822507);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+// mulberry32 — small deterministic PRNG seeded by a 32-bit int
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Deterministically place obstacles. At most one per cell column, so at least
+// two lanes are always open — the track is never fully blocked.
+function generateObstacles(seed, opts) {
+  const { totalCells, lanes, startCell, finishCell, density = 0.38 } = opts;
+  const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
+  const rng = mulberry32(seedNum);
+  const list = [];
+  for (let cell = startCell; cell < finishCell - 1; cell++) {
+    if (rng() >= density) continue;
+    const lane = Math.floor(rng() * lanes);
+    const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
+    list.push({ cell, lane, ...kind });
+  }
+  return list;
+}
+
+// Filled in by buildObstacles() once the seed for the race is known.
+let OBSTACLES = [];
+let OBS_MAP   = new Map();
+let raceSeed  = null;
+
+function buildObstacles(seed) {
+  raceSeed  = seed;
+  OBSTACLES = generateObstacles(seed, {
+    totalCells: TOTAL_CELLS, lanes: LANES, startCell: 6, finishCell: FINISH_CELL,
+  });
+  OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
+}
 
 // ─── track ────────────────────────────────────────────────────────────────────
 const CELL  = 32;   // texture cell size in source pixels
@@ -277,7 +326,8 @@ function handleServerMsg(msg) {
     case 'joined':
       myPlayerId = msg.playerId;
       myColorIdx = msg.colorIdx;
-      setStatus(`Lobby · ${msg.players.length} player(s) — waiting…`);
+      if (msg.seed != null) buildObstacles(msg.seed);
+      setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
       break;
     case 'player-joined':
@@ -289,6 +339,7 @@ function handleServerMsg(msg) {
       break;
     case 'go':
       multiPlayers = msg.players;
+      if (msg.seed != null) buildObstacles(msg.seed); // authoritative seed for the race
       $id('lobby').classList.add('hidden');
       startGame(true);
       break;
@@ -310,7 +361,14 @@ function handleServerMsg(msg) {
   }
 }
 
+// Read the seed input: blank → random seed, otherwise the custom string.
+function readSeedInput() {
+  const raw = $id('seed-code').value.trim();
+  return raw || String(Math.floor(Math.random() * 0xffffffff));
+}
+
 function startSolo() {
+  buildObstacles(readSeedInput());
   $id('lobby').classList.add('hidden');
   startGame(false);
 }
@@ -319,10 +377,11 @@ function joinMulti() {
   const wsUrl  = $id('ws-url').value.trim()     || 'ws://localhost:3000';
   const name   = $id('player-name').value.trim() || 'Crab';
   const roomId = $id('room-code').value.trim()   || 'room1';
+  const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
   setStatus('Connecting…');
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
-  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId }));
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed }));
   ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
   ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
