@@ -21,26 +21,26 @@
   }
   #lobby.hidden { display: none; }
   #lobby-inner {
-    display: flex; flex-direction: column; gap: 10px;
-    max-width: 300px; width: 90%; text-align: center;
+    display: flex; flex-direction: column; gap: 12px;
+    max-width: 340px; width: 90%; text-align: center;
   }
-  #lobby h1   { font-size: 22px; color: #e8d030; text-shadow: 0 0 10px #a08000; letter-spacing: 2px; }
-  #lobby .sub { font-size: 10px; color: #6090a8; letter-spacing: 1px; }
+  #lobby h1   { font-size: 32px; color: #e8d030; text-shadow: 0 0 10px #a08000; letter-spacing: 2px; }
+  #lobby .sub { font-size: 13px; color: #6090a8; letter-spacing: 1px; }
   #lobby button {
     background: #111e30; border: 2px solid #2a5070; color: #a0c8e8;
-    font-family: monospace; font-size: 12px; padding: 8px 14px;
+    font-family: monospace; font-size: 16px; padding: 12px 16px;
     cursor: pointer; letter-spacing: 1px; width: 100%;
   }
   #lobby button:hover { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
   #lobby input {
     background: #0e1828; border: 1px solid #1e3850; color: #c0d8f0;
-    font-family: monospace; font-size: 12px; padding: 6px 8px; width: 100%;
+    font-family: monospace; font-size: 16px; padding: 10px 10px; width: 100%;
     outline: none;
   }
   #lobby input:focus { border-color: #3a7090; }
   #lobby hr    { border: none; border-top: 1px solid #1e3050; margin: 2px 0; }
-  #lobby-status { font-size: 10px; color: #5898b8; min-height: 14px; }
-  #player-list  { font-size: 10px; min-height: 14px; letter-spacing: 1px; }
+  #lobby-status { font-size: 13px; color: #5898b8; min-height: 16px; }
+  #player-list  { font-size: 13px; min-height: 16px; letter-spacing: 1px; }
   #multi-section { display: flex; flex-direction: column; gap: 6px; }
   .lrow { display: flex; gap: 6px; }
   .lrow input  { flex: 1; }
@@ -236,8 +236,20 @@ const OBSTACLES = [
 const OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
 
 // ─── track ────────────────────────────────────────────────────────────────────
-const CELL  = 32;
+const CELL  = 32;   // texture cell size in source pixels
 const LANES = 3;
+
+// ─── render resolution ──────────────────────────────────────────────────────────
+// The game world is laid out in a 480×270 logical space, but we render into a
+// framebuffer scaled up by RES so that text has enough real pixels to stay crisp
+// once Scale.FIT stretches it across a high-DPI display. Pixel-art sprites are
+// drawn at RES× with nearest-neighbour filtering, so they stay perfectly sharp.
+const BASE_W = 480, BASE_H = 270;
+const RES    = Math.max(2, Math.min(4,
+  Math.round((window.innerHeight * (window.devicePixelRatio || 1)) / BASE_H)
+));
+const CELLR  = CELL * RES;              // on-screen cell size
+const fs     = (n) => `${Math.round(n * RES)}px`;   // logical font size → device px
 const ZONES = [
   { tile: 'shore',       len: 5  },
   { tile: 'wetSand',     len: 8  },
@@ -321,8 +333,8 @@ function startGame(isMulti) {
   if (window._phaserGame) return; // guard against double-init
   window._phaserGame = new Phaser.Game({
     type:            Phaser.AUTO,
-    width:           480,
-    height:          270,
+    width:           BASE_W * RES,
+    height:          BASE_H * RES,
     backgroundColor: '#1a2030',
     pixelArt:        true,
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
@@ -364,7 +376,7 @@ class RaceScene extends Phaser.Scene {
 
     // ── scene state ────────────────────────────────────────────
     const { width: W, height: H } = this.scale;
-    const trackTop = Math.floor((H - LANES * CELL) / 2);
+    const trackTop = Math.floor((H - LANES * CELLR) / 2);
     this.trackTop     = trackTop;
     this.busy         = false;
     this.won          = false;
@@ -376,19 +388,20 @@ class RaceScene extends Phaser.Scene {
     // ── terrain ────────────────────────────────────────────────
     for (let cx = 0; cx < TOTAL_CELLS; cx++)
       for (let lane = 0; lane < LANES; lane++)
-        this.add.image(cx * CELL + 16, trackTop + lane * CELL + 16, TRACK[cx]);
+        this.add.image(cx * CELLR + CELLR/2, trackTop + lane * CELLR + CELLR/2, TRACK[cx])
+          .setScale(RES);
 
     const gfx = this.add.graphics();
     gfx.fillStyle(0x000000);
-    gfx.fillRect(0, trackTop - 2,            TOTAL_CELLS * CELL, 2);
-    gfx.fillRect(0, trackTop + LANES * CELL, TOTAL_CELLS * CELL, 2);
+    gfx.fillRect(0, trackTop - 2*RES,           TOTAL_CELLS * CELLR, 2*RES);
+    gfx.fillRect(0, trackTop + LANES * CELLR,    TOTAL_CELLS * CELLR, 2*RES);
 
     // ── obstacles ──────────────────────────────────────────────
     this.obSprites = new Map();
     for (const o of OBSTACLES) {
       const spr = this.add.image(
-        o.cell * CELL + 16, trackTop + o.lane * CELL + 16, 'ob_' + o.type
-      );
+        o.cell * CELLR + CELLR/2, trackTop + o.lane * CELLR + CELLR/2, 'ob_' + o.type
+      ).setScale(RES);
       this.obSprites.set(`${o.cell},${o.lane}`, spr);
     }
 
@@ -399,29 +412,29 @@ class RaceScene extends Phaser.Scene {
       this._setupSoloCrab(trackTop);
     }
 
-    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELL, H);
+    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELLR, H);
     this.cameras.main.startFollow(this.crab, true, 0.1, 1);
-    this.cameras.main.setDeadzone(60, 500);
+    this.cameras.main.setDeadzone(60 * RES, H);
 
     // ── HUD ────────────────────────────────────────────────────
-    this.hudText = this.add.text(8, 8, '', {
-      fontFamily: 'monospace', fontSize: '9px',
-      color: '#7ec8e3', stroke: '#000', strokeThickness: 2,
+    this.hudText = this.add.text(8 * RES, 8 * RES, '', {
+      fontFamily: 'monospace', fontSize: fs(12),
+      color: '#7ec8e3', stroke: '#000', strokeThickness: 3,
     }).setScrollFactor(0);
 
-    this.statusText = this.add.text(W / 2, 8, '', {
-      fontFamily: 'monospace', fontSize: '9px',
-      color: '#ff6060', stroke: '#000', strokeThickness: 2,
+    this.statusText = this.add.text(W / 2, 8 * RES, '', {
+      fontFamily: 'monospace', fontSize: fs(12),
+      color: '#ff6060', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5, 0).setScrollFactor(0);
 
-    this.timerText = this.add.text(W - 8, 8, multiMode ? '' : '0:00.00', {
-      fontFamily: 'monospace', fontSize: '9px',
-      color: '#e8e030', stroke: '#000', strokeThickness: 2,
+    this.timerText = this.add.text(W - 8 * RES, 8 * RES, multiMode ? '' : '0:00.00', {
+      fontFamily: 'monospace', fontSize: fs(12),
+      color: '#e8e030', stroke: '#000', strokeThickness: 3,
     }).setOrigin(1, 0).setScrollFactor(0);
 
-    this.add.text(W / 2, H - 6, 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)', {
-      fontFamily: 'monospace', fontSize: '8px',
-      color: '#ffffff', stroke: '#000', strokeThickness: 2,
+    this.add.text(W / 2, H - 6 * RES, 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)', {
+      fontFamily: 'monospace', fontSize: fs(10),
+      color: '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5, 1).setScrollFactor(0);
 
     // ── input ──────────────────────────────────────────────────
@@ -464,7 +477,8 @@ class RaceScene extends Phaser.Scene {
       const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[0]));
       for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
     }
-    this.crab = this.add.sprite(16, trackTop + this.lane * CELL + 16, key).setFrame(0);
+    this.crab = this.add.sprite(CELLR/2, trackTop + this.lane * CELLR + CELLR/2, key)
+      .setFrame(0).setScale(RES);
 
     if (!this.anims.exists('walk_0')) {
       this.anims.create({
@@ -493,12 +507,12 @@ class RaceScene extends Phaser.Scene {
         });
       }
 
-      const sx = p.cell * CELL + 16;
-      const sy = trackTop + p.lane * CELL + 16;
-      const spr = this.add.sprite(sx, sy, key).setFrame(0);
-      const lbl = this.add.text(sx, sy - 10, p.name, {
-        fontFamily: 'monospace', fontSize: '7px',
-        color: PALETTE_HEX[p.colorIdx], stroke: '#000', strokeThickness: 2,
+      const sx = p.cell * CELLR + CELLR/2;
+      const sy = trackTop + p.lane * CELLR + CELLR/2;
+      const spr = this.add.sprite(sx, sy, key).setFrame(0).setScale(RES);
+      const lbl = this.add.text(sx, sy - 10 * RES, p.name, {
+        fontFamily: 'monospace', fontSize: fs(9),
+        color: PALETTE_HEX[p.colorIdx], stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5, 1);
 
       this.playerCrabs.set(p.id, spr);
@@ -567,8 +581,8 @@ class RaceScene extends Phaser.Scene {
 
     this.tweens.add({
       targets:  this.crab,
-      x:        nextCell * CELL + 16,
-      y:        this.trackTop + nextLane * CELL + 16,
+      x:        nextCell * CELLR + CELLR/2,
+      y:        this.trackTop + nextLane * CELLR + CELLR/2,
       duration: 160, ease: 'Linear',
       onComplete: () => {
         this.cell = nextCell;
@@ -586,7 +600,7 @@ class RaceScene extends Phaser.Scene {
             this.time.delayedCall(200, () => {
               const pushCell = Math.max(0, this.cell - 1);
               this.tweens.add({
-                targets: this.crab, x: pushCell * CELL + 16, duration: 120,
+                targets: this.crab, x: pushCell * CELLR + CELLR/2, duration: 120,
                 ease: 'Linear', onComplete: () => { this.cell = pushCell; this.refreshHUD(); }
               });
             });
@@ -613,14 +627,14 @@ class RaceScene extends Phaser.Scene {
       const lbl = this.playerLabels?.get(p.id);
       if (!spr) continue;
 
-      const tx = p.cell * CELL + 16;
-      const ty = this.trackTop + p.lane * CELL + 16;
+      const tx = p.cell * CELLR + CELLR/2;
+      const ty = this.trackTop + p.lane * CELLR + CELLR/2;
 
       if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
         this.tweens.add({
           targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
-          onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10),
-          onComplete: () => lbl?.setPosition(tx, ty - 10),
+          onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
+          onComplete: () => lbl?.setPosition(tx, ty - 10 * RES),
         });
       }
 
@@ -685,13 +699,14 @@ class RaceScene extends Phaser.Scene {
     const { width: W, height: H } = this.scale;
 
     if (multiMode) {
-      this.add.rectangle(W/2, H/2, 240, 72, 0x0a1828, 230).setScrollFactor(0);
-      this.add.text(W/2, H/2 - 14, '🦀  YOU WIN!  🦀', {
-        fontFamily: 'monospace', fontSize: '18px',
-        color: '#e8e030', stroke: '#000', strokeThickness: 3,
+      this.add.rectangle(W/2, H/2, 240*RES, 80*RES, 0x0a1828, 230).setScrollFactor(0);
+      this.add.text(W/2, H/2 - 16*RES, '🦀  YOU WIN!  🦀', {
+        fontFamily: 'monospace', fontSize: fs(20),
+        color: '#e8e030', stroke: '#000', strokeThickness: 4,
       }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 14, 'refresh to race again', {
-        fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+      this.add.text(W/2, H/2 + 16*RES, 'refresh to race again', {
+        fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
+        stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
     } else {
       const cs  = this.raceTime % 100;
@@ -699,17 +714,18 @@ class RaceScene extends Phaser.Scene {
       const m   = Math.floor(sec / 60), s = sec % 60;
       const timeStr = `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
 
-      this.add.rectangle(W/2, H/2, 240, 84, 0x0a1828, 230).setScrollFactor(0);
-      this.add.text(W/2, H/2 - 20, '🦀  FINISH!  🦀', {
-        fontFamily: 'monospace', fontSize: '18px',
-        color: '#e8e030', stroke: '#000', strokeThickness: 3,
+      this.add.rectangle(W/2, H/2, 240*RES, 92*RES, 0x0a1828, 230).setScrollFactor(0);
+      this.add.text(W/2, H/2 - 22*RES, '🦀  FINISH!  🦀', {
+        fontFamily: 'monospace', fontSize: fs(20),
+        color: '#e8e030', stroke: '#000', strokeThickness: 4,
       }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 4, `Time: ${timeStr}`, {
-        fontFamily: 'monospace', fontSize: '11px',
-        color: '#ffffff', stroke: '#000', strokeThickness: 2,
+      this.add.text(W/2, H/2 + 4*RES, `Time: ${timeStr}`, {
+        fontFamily: 'monospace', fontSize: fs(13),
+        color: '#ffffff', stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 22, 'tap or space to race again', {
-        fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+      this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again', {
+        fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
+        stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
 
       this.time.delayedCall(400, () => {
@@ -724,13 +740,14 @@ class RaceScene extends Phaser.Scene {
     if (this.won) return;
     this.won = true;
     const { width: W, height: H } = this.scale;
-    this.add.rectangle(W/2, H/2, 260, 72, 0x200808, 230).setScrollFactor(0);
-    this.add.text(W/2, H/2 - 14, `🦀 ${name} WINS!`, {
-      fontFamily: 'monospace', fontSize: '16px',
-      color: '#e05050', stroke: '#000', strokeThickness: 3,
+    this.add.rectangle(W/2, H/2, 260*RES, 80*RES, 0x200808, 230).setScrollFactor(0);
+    this.add.text(W/2, H/2 - 16*RES, `🦀 ${name} WINS!`, {
+      fontFamily: 'monospace', fontSize: fs(18),
+      color: '#e05050', stroke: '#000', strokeThickness: 4,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 14, 'refresh to race again', {
-      fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+    this.add.text(W/2, H/2 + 16*RES, 'refresh to race again', {
+      fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
+      stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
   }
 }
