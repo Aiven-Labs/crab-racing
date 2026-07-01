@@ -8,21 +8,88 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     background: #0a0f1e;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    overflow: hidden;
-    touch-action: none;
+    display: flex; justify-content: center; align-items: center;
+    height: 100vh; overflow: hidden; touch-action: none;
   }
+
+  /* ── Lobby overlay ─────────────────────────────────── */
+  #lobby {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: #0a0f1e;
+    display: flex; justify-content: center; align-items: center;
+    z-index: 10; font-family: monospace; color: #c0d8f0;
+  }
+  #lobby.hidden { display: none; }
+  #lobby-inner {
+    display: flex; flex-direction: column; gap: 10px;
+    max-width: 300px; width: 90%; text-align: center;
+  }
+  #lobby h1   { font-size: 22px; color: #e8d030; text-shadow: 0 0 10px #a08000; letter-spacing: 2px; }
+  #lobby .sub { font-size: 10px; color: #6090a8; letter-spacing: 1px; }
+  #lobby button {
+    background: #111e30; border: 2px solid #2a5070; color: #a0c8e8;
+    font-family: monospace; font-size: 12px; padding: 8px 14px;
+    cursor: pointer; letter-spacing: 1px; width: 100%;
+  }
+  #lobby button:hover { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
+  #lobby input {
+    background: #0e1828; border: 1px solid #1e3850; color: #c0d8f0;
+    font-family: monospace; font-size: 12px; padding: 6px 8px; width: 100%;
+    outline: none;
+  }
+  #lobby input:focus { border-color: #3a7090; }
+  #lobby hr    { border: none; border-top: 1px solid #1e3050; margin: 2px 0; }
+  #lobby-status { font-size: 10px; color: #5898b8; min-height: 14px; }
+  #player-list  { font-size: 10px; min-height: 14px; letter-spacing: 1px; }
+  #multi-section { display: flex; flex-direction: column; gap: 6px; }
+  .lrow { display: flex; gap: 6px; }
+  .lrow input  { flex: 1; }
+  .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
 </style>
 </head>
 <body>
+
+<!-- ── Lobby ─────────────────────────────────────────── -->
+<div id="lobby">
+  <div id="lobby-inner">
+    <h1>🦀 CRAB RACING</h1>
+    <div class="sub">COASTAL SURVIVAL RACE</div>
+    <button id="btn-solo">Solo Race</button>
+    <hr>
+    <div id="multi-section">
+      <input id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
+      <input id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
+      <div class="lrow">
+        <input id="ws-url" placeholder="Server" value="ws://localhost:3000">
+        <button id="btn-multi">Join</button>
+      </div>
+    </div>
+    <div id="lobby-status">Enter a name &amp; room, then Join</div>
+    <div id="player-list"></div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
 <script>
 'use strict';
 
-// ─── pixel art helpers ────────────────────────────────────────────────────────
+// ─── multiplayer globals ───────────────────────────────────────────────────────
+let ws           = null;
+let myPlayerId   = null;
+let myColorIdx   = 0;
+let multiMode    = false;
+let multiPlayers = [];    // player list received with 'go' message
+let gameScene    = null;  // set by RaceScene.create()
+
+const CRAB_PALETTES = [
+  ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
+  ['#a04030', '#c06050', '#903020', '#d09080'], // 1 red
+  ['#408030', '#60a050', '#307020', '#80c070'], // 2 green
+  ['#804090', '#a060b0', '#703080', '#c090d0'], // 3 purple
+];
+const PALETTE_HEX = ['#68a0c0', '#c06050', '#60a050', '#a060b0'];
+
+// ─── pixel art helpers ─────────────────────────────────────────────────────────
 function px(ctx,x,y,c)         { ctx.fillStyle=c; ctx.fillRect(x,y,1,1); }
 function hline(ctx,x1,x2,y,c) { ctx.fillStyle=c; ctx.fillRect(x1,y,x2-x1+1,1); }
 function vline(ctx,x,y1,y2,c) { ctx.fillStyle=c; ctx.fillRect(x,y1,1,y2-y1+1); }
@@ -42,7 +109,7 @@ function makeCanvas(w,h) {
   return { canvas: c, ctx };
 }
 
-// ─── terrain tile generators (32×32) ─────────────────────────────────────────
+// ─── terrain tile generators (32×32) ──────────────────────────────────────────
 function drawShore(ctx) {
   rect(ctx,0,0,32,32,'#d4c898');
   for (let i=0; i<32; i+=4) hline(ctx,0,31,i,'#c8bc88');
@@ -75,40 +142,29 @@ function drawFinish(ctx) {
       px(ctx,x,y, ((Math.floor(x/4)+Math.floor(y/4))%2===0) ? '#f0f0e0' : '#202020');
 }
 
-// ─── spider crab sprite sheet ─────────────────────────────────────────────────
-// 4 frames × 32px = 128×32 canvas
-// Body vertical (perpendicular to movement), legs cycle left/right
-function makeCrabSheet() {
+// ─── spider crab sprite sheet (128×32, 4 walk frames) ─────────────────────────
+// palette = [body, bodyHighlight, leg, tip]  — defaults to blue
+function makeCrabSheet(palette) {
+  const [BODY, BODYH, LEG, TIP] = palette || CRAB_PALETTES[0];
   const { canvas, ctx } = makeCanvas(128, 32);
-  const BODY  = '#4a80a0';
-  const BODYH = '#68a0c0';
-  const LEG   = '#3870a0';
-  const TIP   = '#90c0d8';
 
   for (let f = 0; f < 4; f++) {
     const ox    = f * 32;
     const phase = f * Math.PI / 2;
 
-    // 4 leg pairs
     for (let i = 0; i < 4; i++) {
       const legY = 8 + i * 5;
       const lLen = 5 + Math.round(2 * Math.sin(phase + i * 0.9));
       const rLen = 5 + Math.round(2 * Math.sin(phase + i * 0.9 + Math.PI));
-      hline(ctx, ox+9-lLen, ox+9,      legY, LEG);
-      hline(ctx, ox+22,     ox+22+rLen, legY, LEG);
+      hline(ctx, ox+9-lLen, ox+9,       legY, LEG);
+      hline(ctx, ox+22,     ox+22+rLen,  legY, LEG);
       px(ctx, ox+9-lLen,  legY, TIP);
       px(ctx, ox+22+rLen, legY, TIP);
     }
-
-    // Body
     ellipse(ctx, ox+16, 16, 6, 10, BODY);
     ellipse(ctx, ox+15, 14,  4,  7, BODYH);
-
-    // Eyes
     px(ctx, ox+21, 11, '#f0f0f0'); px(ctx, ox+22, 11, '#202020');
     px(ctx, ox+21, 21, '#f0f0f0'); px(ctx, ox+22, 21, '#202020');
-
-    // Claws (top + bottom)
     hline(ctx, ox+11, ox+21, 3,  LEG);
     hline(ctx, ox+12, ox+20, 4,  BODY);
     hline(ctx, ox+11, ox+21, 5,  LEG);
@@ -119,7 +175,7 @@ function makeCrabSheet() {
   return canvas;
 }
 
-// ─── obstacle sprite generators (32×32, transparent bg) ─────────────────────
+// ─── obstacle sprite generators (32×32) ───────────────────────────────────────
 function drawRock(ctx) {
   ellipse(ctx, 19, 20, 12, 9, '#706858');
   ellipse(ctx, 13, 16,  8, 6, '#908878');
@@ -160,26 +216,23 @@ function drawNet(ctx) {
       px(ctx, x, y, '#d0a850');
 }
 
-// ─── obstacle definitions ─────────────────────────────────────────────────────
-// effect: 'block' = can't enter | 'stun' = frozen N turns | 'push' = bounced back
+// ─── obstacle definitions ──────────────────────────────────────────────────────
 const OBSTACLES = [
-  { cell: 7,  lane: 0, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'   },
-  { cell: 9,  lane: 2, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
-  { cell: 11, lane: 1, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'   },
-  { cell: 15, lane: 1, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 7,  lane: 0, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'    },
+  { cell: 9,  lane: 2, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+  { cell: 11, lane: 1, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'    },
+  { cell: 15, lane: 1, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
   { cell: 17, lane: 0, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
-  { cell: 19, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 19, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
   { cell: 22, lane: 1, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
-  { cell: 26, lane: 0, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
-  { cell: 28, lane: 2, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
-  { cell: 30, lane: 1, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
-  { cell: 33, lane: 0, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
-  { cell: 36, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
-  { cell: 39, lane: 1, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
-  { cell: 41, lane: 0, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
+  { cell: 26, lane: 0, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
+  { cell: 28, lane: 2, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
+  { cell: 30, lane: 1, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+  { cell: 33, lane: 0, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
+  { cell: 36, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'   },
+  { cell: 39, lane: 1, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'  },
+  { cell: 41, lane: 0, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
 ];
-
-// fast lookup: "cell,lane" → obstacle
 const OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
 
 // ─── track ────────────────────────────────────────────────────────────────────
@@ -198,41 +251,120 @@ for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
 const TOTAL_CELLS = TRACK.length;
 const FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
 
-// ─── scene ────────────────────────────────────────────────────────────────────
+// ─── lobby / WebSocket ────────────────────────────────────────────────────────
+function $id(id) { return document.getElementById(id); }
+function setStatus(t) { $id('lobby-status').textContent = t; }
+function setPlayerList(players) {
+  $id('player-list').innerHTML = players
+    .map(p => `<span style="color:${PALETTE_HEX[p.colorIdx]}">${p.name}</span>`)
+    .join(' · ');
+}
+
+function handleServerMsg(msg) {
+  switch (msg.type) {
+    case 'joined':
+      myPlayerId = msg.playerId;
+      myColorIdx = msg.colorIdx;
+      setStatus(`Lobby · ${msg.players.length} player(s) — waiting…`);
+      setPlayerList(msg.players);
+      break;
+    case 'player-joined':
+      setStatus(`${msg.players.length} player(s) ready`);
+      setPlayerList(msg.players);
+      break;
+    case 'countdown':
+      setStatus(`Starting in ${msg.count}…`);
+      break;
+    case 'go':
+      multiPlayers = msg.players;
+      $id('lobby').classList.add('hidden');
+      startGame(true);
+      break;
+    case 'state':
+      if (gameScene) gameScene.applyServerState(msg.players, msg.result, msg.movedId);
+      break;
+    case 'win':
+      if (gameScene) {
+        if (msg.playerId === myPlayerId) gameScene.onWin();
+        else gameScene.onOtherWin(msg.name);
+      }
+      break;
+    case 'player-left':
+      if (gameScene) gameScene.onPlayerLeft(msg.playerId);
+      break;
+    case 'error':
+      setStatus(`⚠ ${msg.msg}`);
+      break;
+  }
+}
+
+function startSolo() {
+  $id('lobby').classList.add('hidden');
+  startGame(false);
+}
+
+function joinMulti() {
+  const wsUrl  = $id('ws-url').value.trim()     || 'ws://localhost:3000';
+  const name   = $id('player-name').value.trim() || 'Crab';
+  const roomId = $id('room-code').value.trim()   || 'room1';
+  setStatus('Connecting…');
+  try { ws = new WebSocket(wsUrl); }
+  catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId }));
+  ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
+  ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
+  ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
+}
+
+function startGame(isMulti) {
+  multiMode = isMulti;
+  if (window._phaserGame) return; // guard against double-init
+  window._phaserGame = new Phaser.Game({
+    type:            Phaser.AUTO,
+    width:           480,
+    height:          270,
+    backgroundColor: '#1a2030',
+    pixelArt:        true,
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scene: RaceScene,
+  });
+}
+
+$id('btn-solo').onclick  = startSolo;
+$id('btn-multi').onclick = joinMulti;
+
+// ─── Phaser scene ─────────────────────────────────────────────────────────────
 class RaceScene extends Phaser.Scene {
   constructor() { super('Race'); }
 
   // No preload — all textures created synchronously in create()
   create() {
-    // ── register textures directly (no loader, no async) ──────
+    gameScene = this;
+
+    // ── tile textures ──────────────────────────────────────────
     const tileDrawers = { shore: drawShore, wetSand: drawWetSand, drySand: drawDrySand,
                           undergrowth: drawUndergrowth, treeline: drawTreeline, finish: drawFinish };
     for (const [key, fn] of Object.entries(tileDrawers)) {
-      const { canvas, ctx } = makeCanvas(32, 32);
-      fn(ctx);
-      this.textures.addCanvas(key, canvas);
+      if (!this.textures.exists(key)) {
+        const { canvas, ctx } = makeCanvas(32, 32); fn(ctx);
+        this.textures.addCanvas(key, canvas);
+      }
     }
 
-    // obstacle textures
+    // ── obstacle textures ──────────────────────────────────────
     const obDrawers = { rock: drawRock, hole: drawHole, jelly: drawJelly,
                         beach: drawBeach, net: drawNet };
     for (const [key, fn] of Object.entries(obDrawers)) {
-      const { canvas, ctx } = makeCanvas(32, 32);
-      fn(ctx);
-      this.textures.addCanvas('ob_' + key, canvas);
+      const tkey = 'ob_' + key;
+      if (!this.textures.exists(tkey)) {
+        const { canvas, ctx } = makeCanvas(32, 32); fn(ctx);
+        this.textures.addCanvas(tkey, canvas);
+      }
     }
 
-    // Crab spritesheet: addCanvas then attach frame definitions manually
-    const crabCanvas = makeCrabSheet();
-    const crabTex    = this.textures.addCanvas('crab', crabCanvas);
-    for (let i = 0; i < 4; i++) crabTex.add(i, 0, i * 32, 0, 32, 32);
-
-    // ── scene state ───────────────────────────────────────────
+    // ── scene state ────────────────────────────────────────────
     const { width: W, height: H } = this.scale;
     const trackTop = Math.floor((H - LANES * CELL) / 2);
-    const midLane  = Math.floor(LANES / 2);
-    this.cell      = 0;
-    this.lane         = midLane;
     this.trackTop     = trackTop;
     this.busy         = false;
     this.won          = false;
@@ -241,62 +373,37 @@ class RaceScene extends Phaser.Scene {
     this.timerStarted = false;
     this.timerEvent   = null;
 
-    // ── terrain ───────────────────────────────────────────────
+    // ── terrain ────────────────────────────────────────────────
     for (let cx = 0; cx < TOTAL_CELLS; cx++)
       for (let lane = 0; lane < LANES; lane++)
         this.add.image(cx * CELL + 16, trackTop + lane * CELL + 16, TRACK[cx]);
 
-    // Track border
     const gfx = this.add.graphics();
     gfx.fillStyle(0x000000);
     gfx.fillRect(0, trackTop - 2,            TOTAL_CELLS * CELL, 2);
     gfx.fillRect(0, trackTop + LANES * CELL, TOTAL_CELLS * CELL, 2);
 
-    // ── obstacles ─────────────────────────────────────────────
+    // ── obstacles ──────────────────────────────────────────────
     this.obSprites = new Map();
     for (const o of OBSTACLES) {
       const spr = this.add.image(
-        o.cell * CELL + 16,
-        trackTop + o.lane * CELL + 16,
-        'ob_' + o.type
+        o.cell * CELL + 16, trackTop + o.lane * CELL + 16, 'ob_' + o.type
       );
       this.obSprites.set(`${o.cell},${o.lane}`, spr);
     }
 
-    // ── crab ──────────────────────────────────────────────────
-    this.crab = this.add.sprite(16, trackTop + midLane * CELL + 16, 'crab');
-    this.crab.setFrame(0);
+    // ── crabs: solo vs multiplayer ─────────────────────────────
+    if (multiMode) {
+      this._setupMultiCrabs(trackTop);
+    } else {
+      this._setupSoloCrab(trackTop);
+    }
 
-    this.anims.create({
-      key: 'walk',
-      frames: [
-        { key: 'crab', frame: 0 },
-        { key: 'crab', frame: 1 },
-        { key: 'crab', frame: 2 },
-        { key: 'crab', frame: 3 },
-      ],
-      frameRate: 10,
-      repeat: -1,
-    });
-
-    // ── camera ────────────────────────────────────────────────
     this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELL, H);
     this.cameras.main.startFollow(this.crab, true, 0.1, 1);
     this.cameras.main.setDeadzone(60, 500);
 
-    // ── input ─────────────────────────────────────────────────
-    this.input.keyboard.on('keydown-SPACE',  () => this.move( 1,  0));
-    this.input.keyboard.on('keydown-RIGHT',  () => this.move( 1,  0));
-    this.input.keyboard.on('keydown-LEFT',   () => this.move(-1,  0));
-    this.input.keyboard.on('keydown-UP',     () => this.move( 0, -1));
-    this.input.keyboard.on('keydown-DOWN',   () => this.move( 0,  1));
-    this.input.keyboard.on('keydown-W',      () => this.move( 0, -1));
-    this.input.keyboard.on('keydown-S',      () => this.move( 0,  1));
-    this.input.keyboard.on('keydown-A',      () => this.move(-1,  0));
-    this.input.keyboard.on('keydown-D',      () => this.move( 1,  0));
-    this.input.on('pointerdown', () => this.move(1, 0));
-
-    // ── HUD ───────────────────────────────────────────────────
+    // ── HUD ────────────────────────────────────────────────────
     this.hudText = this.add.text(8, 8, '', {
       fontFamily: 'monospace', fontSize: '9px',
       color: '#7ec8e3', stroke: '#000', strokeThickness: 2,
@@ -307,7 +414,7 @@ class RaceScene extends Phaser.Scene {
       color: '#ff6060', stroke: '#000', strokeThickness: 2,
     }).setOrigin(0.5, 0).setScrollFactor(0);
 
-    this.timerText = this.add.text(W - 8, 8, '0:00.00', {
+    this.timerText = this.add.text(W - 8, 8, multiMode ? '' : '0:00.00', {
       fontFamily: 'monospace', fontSize: '9px',
       color: '#e8e030', stroke: '#000', strokeThickness: 2,
     }).setOrigin(1, 0).setScrollFactor(0);
@@ -317,24 +424,100 @@ class RaceScene extends Phaser.Scene {
       color: '#ffffff', stroke: '#000', strokeThickness: 2,
     }).setOrigin(0.5, 1).setScrollFactor(0);
 
+    // ── input ──────────────────────────────────────────────────
+    this.input.keyboard.on('keydown-SPACE', () => this.move( 1,  0));
+    this.input.keyboard.on('keydown-RIGHT', () => this.move( 1,  0));
+    this.input.keyboard.on('keydown-LEFT',  () => this.move(-1,  0));
+    this.input.keyboard.on('keydown-UP',    () => this.move( 0, -1));
+    this.input.keyboard.on('keydown-DOWN',  () => this.move( 0,  1));
+    this.input.keyboard.on('keydown-W',     () => this.move( 0, -1));
+    this.input.keyboard.on('keydown-S',     () => this.move( 0,  1));
+    this.input.keyboard.on('keydown-A',     () => this.move(-1,  0));
+    this.input.keyboard.on('keydown-D',     () => this.move( 1,  0));
+    this.input.on('pointerdown', () => this.move(1, 0));
+
     this.refreshHUD();
   }
 
+  // ── crab setup helpers ─────────────────────────────────────────────────────
+  _setupSoloCrab(trackTop) {
+    this.cell = 0;
+    this.lane = Math.floor(LANES / 2);
+
+    const key = 'crab_0';
+    if (!this.textures.exists(key)) {
+      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[0]));
+      for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
+    }
+    this.crab = this.add.sprite(16, trackTop + this.lane * CELL + 16, key).setFrame(0);
+
+    if (!this.anims.exists('walk_0')) {
+      this.anims.create({
+        key: 'walk_0',
+        frames: [0,1,2,3].map(i => ({ key, frame: i })),
+        frameRate: 10, repeat: -1,
+      });
+    }
+  }
+
+  _setupMultiCrabs(trackTop) {
+    this.playerCrabs  = new Map(); // playerId → Sprite
+    this.playerLabels = new Map(); // playerId → Text
+
+    for (const p of multiPlayers) {
+      const key = `crab_${p.colorIdx}`;
+      if (!this.textures.exists(key)) {
+        const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[p.colorIdx]));
+        for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
+      }
+      if (!this.anims.exists('walk_' + p.colorIdx)) {
+        this.anims.create({
+          key: 'walk_' + p.colorIdx,
+          frames: [0,1,2,3].map(i => ({ key, frame: i })),
+          frameRate: 10, repeat: -1,
+        });
+      }
+
+      const sx = p.cell * CELL + 16;
+      const sy = trackTop + p.lane * CELL + 16;
+      const spr = this.add.sprite(sx, sy, key).setFrame(0);
+      const lbl = this.add.text(sx, sy - 10, p.name, {
+        fontFamily: 'monospace', fontSize: '7px',
+        color: PALETTE_HEX[p.colorIdx], stroke: '#000', strokeThickness: 2,
+      }).setOrigin(0.5, 1);
+
+      this.playerCrabs.set(p.id, spr);
+      this.playerLabels.set(p.id, lbl);
+    }
+
+    const myP  = multiPlayers.find(p => p.id === myPlayerId) ?? multiPlayers[0];
+    this.crab  = this.playerCrabs.get(myP.id);
+    this.cell  = myP.cell;
+    this.lane  = myP.lane;
+  }
+
+  // ── move ──────────────────────────────────────────────────────────────────
   move(dx, dlane) {
     if (this.busy || this.won) return;
 
-    // start timer on first move
+    // MULTIPLAYER: send to server; applyServerState() handles the result
+    if (multiMode) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'move', dx, dlane }));
+      }
+      return;
+    }
+
+    // SOLO: local authoritative logic (unchanged from original)
     if (!this.timerStarted) {
       this.timerStarted = true;
       this.timerEvent = this.time.addEvent({
-        delay: 10,
-        loop: true,
+        delay: 10, loop: true,
         callback: () => {
           this.raceTime++;
           const cs  = this.raceTime % 100;
           const sec = Math.floor(this.raceTime / 100);
-          const m   = Math.floor(sec / 60);
-          const s   = sec % 60;
+          const m   = Math.floor(sec / 60), s = sec % 60;
           this.timerText.setText(
             `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`
           );
@@ -342,7 +525,6 @@ class RaceScene extends Phaser.Scene {
       });
     }
 
-    // stun: count down and flash
     if (this.stunTurns > 0) {
       this.stunTurns--;
       this.cameras.main.shake(120, 0.006);
@@ -354,32 +536,25 @@ class RaceScene extends Phaser.Scene {
 
     const nextCell = this.cell + dx;
     const nextLane = this.lane + dlane;
-
-    // bounds check
     if (nextCell < 0 || nextCell >= TOTAL_CELLS) return;
     if (nextLane < 0 || nextLane >= LANES) return;
 
-    // obstacle check
     const obs = OBS_MAP.get(`${nextCell},${nextLane}`);
-    if (obs) {
-      if (obs.effect === 'block') {
-        // can't enter — shake and flash message
-        this.cameras.main.shake(100, 0.008);
-        this.statusText.setText(obs.msg);
-        this.time.delayedCall(800, () => this.statusText.setText(''));
-        return;
-      }
+    if (obs?.effect === 'block') {
+      this.cameras.main.shake(100, 0.008);
+      this.statusText.setText(obs.msg);
+      this.time.delayedCall(800, () => this.statusText.setText(''));
+      return;
     }
 
     this.busy = true;
-    if (dx !== 0) this.crab.play('walk');
+    if (dx !== 0) this.crab.play('walk_0');
 
     this.tweens.add({
       targets:  this.crab,
       x:        nextCell * CELL + 16,
       y:        this.trackTop + nextLane * CELL + 16,
-      duration: 160,
-      ease:     'Linear',
+      duration: 160, ease: 'Linear',
       onComplete: () => {
         this.cell = nextCell;
         this.lane = nextLane;
@@ -391,7 +566,6 @@ class RaceScene extends Phaser.Scene {
             this.statusText.setText(obs.msg);
             this.cameras.main.flash(200, 255, 80, 0);
           } else if (obs.effect === 'push') {
-            // bounce back 1 cell on next move (immediate push)
             this.statusText.setText(obs.msg);
             this.cameras.main.shake(150, 0.01);
             this.time.delayedCall(200, () => {
@@ -406,7 +580,6 @@ class RaceScene extends Phaser.Scene {
         }
 
         this.refreshHUD();
-
         if (this.cell >= FINISH_CELL) {
           this.onWin();
         } else {
@@ -417,6 +590,67 @@ class RaceScene extends Phaser.Scene {
     });
   }
 
+  // ── applyServerState ────────────────────────────────────────────────────────
+  // Called by handleServerMsg when server broadcasts updated game state
+  applyServerState(players, result, movedId) {
+    for (const p of players) {
+      const spr = this.playerCrabs?.get(p.id);
+      const lbl = this.playerLabels?.get(p.id);
+      if (!spr) continue;
+
+      const tx = p.cell * CELL + 16;
+      const ty = this.trackTop + p.lane * CELL + 16;
+
+      if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
+        this.tweens.add({
+          targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
+          onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10),
+          onComplete: () => lbl?.setPosition(tx, ty - 10),
+        });
+      }
+
+      if (p.id === myPlayerId) {
+        this.cell      = p.cell;
+        this.lane      = p.lane;
+        this.stunTurns = p.stunTurns;
+        this.refreshHUD();
+      }
+    }
+
+    // Show feedback for my own move result
+    if (result && movedId === myPlayerId) {
+      const eff = result.effect;
+      if (eff === 'block') {
+        this.cameras.main.shake(100, 0.008);
+        this.statusText.setText(result.msg || 'BLOCKED!');
+        this.time.delayedCall(800, () => this.statusText.setText(''));
+      } else if (eff === 'stunned') {
+        this.cameras.main.shake(120, 0.006);
+        const left = result.stunLeft ?? 0;
+        this.statusText.setText(left > 0 ? `STUNNED — ${left} turn${left > 1 ? 's' : ''} left` : 'RECOVERED!');
+        if (left === 0) this.time.delayedCall(600, () => this.statusText.setText(''));
+      } else if (eff?.type === 'stun') {
+        this.statusText.setText(eff.msg);
+        this.cameras.main.flash(200, 255, 80, 0);
+      } else if (eff?.type === 'push') {
+        this.statusText.setText(eff.msg);
+        this.cameras.main.shake(150, 0.01);
+        this.time.delayedCall(900, () => this.statusText.setText(''));
+      }
+    }
+  }
+
+  // ── onPlayerLeft ────────────────────────────────────────────────────────────
+  onPlayerLeft(playerId) {
+    this.playerCrabs?.get(playerId)?.destroy();
+    this.playerLabels?.get(playerId)?.destroy();
+    this.playerCrabs?.delete(playerId);
+    this.playerLabels?.delete(playerId);
+    this.statusText.setText('A player left the race');
+    this.time.delayedCall(1500, () => this.statusText.setText(''));
+  }
+
+  // ── refreshHUD ──────────────────────────────────────────────────────────────
   refreshHUD() {
     const zone = TRACK[Math.min(this.cell, TOTAL_CELLS - 1)];
     const pct  = Math.min(100, Math.round(this.cell / FINISH_CELL * 100));
@@ -425,52 +659,68 @@ class RaceScene extends Phaser.Scene {
     this.hudText.setText(`${zone.toUpperCase()}  ${bar}  ${pct}%`);
   }
 
+  // ── onWin ───────────────────────────────────────────────────────────────────
   onWin() {
+    if (this.won) return;
     this.won = true;
-    this.crab.stop();
-    this.crab.setFrame(0);
+    this.crab?.stop?.();
+    this.crab?.setFrame?.(0);
     if (this.timerEvent) this.timerEvent.remove();
 
-    const cs  = this.raceTime % 100;
-    const sec = Math.floor(this.raceTime / 100);
-    const m   = Math.floor(sec / 60);
-    const s   = sec % 60;
-    const timeStr = `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
-
     const { width: W, height: H } = this.scale;
-    this.add.rectangle(W/2, H/2, 240, 84, 0x0a1828, 230).setScrollFactor(0);
-    this.add.text(W/2, H/2 - 20, '🦀  FINISH!  🦀', {
-      fontFamily: 'monospace', fontSize: '18px',
-      color: '#e8e030', stroke: '#000', strokeThickness: 3,
+
+    if (multiMode) {
+      this.add.rectangle(W/2, H/2, 240, 72, 0x0a1828, 230).setScrollFactor(0);
+      this.add.text(W/2, H/2 - 14, '🦀  YOU WIN!  🦀', {
+        fontFamily: 'monospace', fontSize: '18px',
+        color: '#e8e030', stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0);
+      this.add.text(W/2, H/2 + 14, 'refresh to race again', {
+        fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+      }).setOrigin(0.5).setScrollFactor(0);
+    } else {
+      const cs  = this.raceTime % 100;
+      const sec = Math.floor(this.raceTime / 100);
+      const m   = Math.floor(sec / 60), s = sec % 60;
+      const timeStr = `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
+
+      this.add.rectangle(W/2, H/2, 240, 84, 0x0a1828, 230).setScrollFactor(0);
+      this.add.text(W/2, H/2 - 20, '🦀  FINISH!  🦀', {
+        fontFamily: 'monospace', fontSize: '18px',
+        color: '#e8e030', stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0);
+      this.add.text(W/2, H/2 + 4, `Time: ${timeStr}`, {
+        fontFamily: 'monospace', fontSize: '11px',
+        color: '#ffffff', stroke: '#000', strokeThickness: 2,
+      }).setOrigin(0.5).setScrollFactor(0);
+      this.add.text(W/2, H/2 + 22, 'tap or space to race again', {
+        fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+      }).setOrigin(0.5).setScrollFactor(0);
+
+      this.time.delayedCall(400, () => {
+        this.input.once('pointerdown', () => this.scene.restart());
+        this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+      });
+    }
+  }
+
+  // ── onOtherWin ──────────────────────────────────────────────────────────────
+  onOtherWin(name) {
+    if (this.won) return;
+    this.won = true;
+    const { width: W, height: H } = this.scale;
+    this.add.rectangle(W/2, H/2, 260, 72, 0x200808, 230).setScrollFactor(0);
+    this.add.text(W/2, H/2 - 14, `🦀 ${name} WINS!`, {
+      fontFamily: 'monospace', fontSize: '16px',
+      color: '#e05050', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 4, `Time: ${timeStr}`, {
-      fontFamily: 'monospace', fontSize: '11px',
-      color: '#ffffff', stroke: '#000', strokeThickness: 2,
-    }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 22, 'tap or space to race again', {
+    this.add.text(W/2, H/2 + 14, 'refresh to race again', {
       fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
     }).setOrigin(0.5).setScrollFactor(0);
-
-    // small delay so the winning tap doesn't immediately restart
-    this.time.delayedCall(400, () => {
-      this.input.once('pointerdown', () => this.scene.restart());
-      this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
-    });
   }
 }
 
-new Phaser.Game({
-  type:            Phaser.AUTO,
-  width:           480,
-  height:          270,
-  backgroundColor: '#1a2030',
-  pixelArt:        true,
-  scale: {
-    mode:       Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
-  },
-  scene: RaceScene,
-});
+// Phaser.Game is created lazily by startGame() when the user picks a mode.
 </script>
 </body>
 </html>
