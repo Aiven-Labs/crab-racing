@@ -419,7 +419,7 @@ class RaceScene extends Phaser.Scene {
       color: '#e8e030', stroke: '#000', strokeThickness: 2,
     }).setOrigin(1, 0).setScrollFactor(0);
 
-    this.add.text(W / 2, H - 6, '← → move  ↑ ↓ shift lane  (WASD / arrows)', {
+    this.add.text(W / 2, H - 6, 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)', {
       fontFamily: 'monospace', fontSize: '8px',
       color: '#ffffff', stroke: '#000', strokeThickness: 2,
     }).setOrigin(0.5, 1).setScrollFactor(0);
@@ -434,7 +434,22 @@ class RaceScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-S',     () => this.move( 0,  1));
     this.input.keyboard.on('keydown-A',     () => this.move(-1,  0));
     this.input.keyboard.on('keydown-D',     () => this.move( 1,  0));
-    this.input.on('pointerdown', () => this.move(1, 0));
+    // Touch / mouse: tap = move forward, vertical swipe = shift lane
+    this._swipe = null;
+    this.input.on('pointerdown', (p) => { this._swipe = { x: p.x, y: p.y }; });
+    this.input.on('pointerup', (p) => {
+      const s = this._swipe;
+      this._swipe = null;
+      if (!s) return;
+      const dx = p.x - s.x;
+      const dy = p.y - s.y;
+      const SWIPE = 24; // px threshold in screen space
+      if (Math.abs(dy) > SWIPE && Math.abs(dy) > Math.abs(dx)) {
+        this.move(0, dy < 0 ? -1 : 1);        // swipe up / down shifts lane
+      } else {
+        this.move(1, 0);                       // tap (or horizontal) moves forward
+      }
+    });
 
     this.refreshHUD();
   }
