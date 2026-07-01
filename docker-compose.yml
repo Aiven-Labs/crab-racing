@@ -1,7 +1,33 @@
-# Local Kafka for development — no auth, single broker
 # Usage: docker compose up -d
-# Then set KAFKA_BROKER=localhost:9092 in your .env (leave KAFKA_USER/PASS blank)
+# Game:   http://localhost:8080
+# Server: ws://localhost:3000  (or set WS URL in the lobby to ws://localhost:3000)
 services:
+
+  # ── Static file server ─────────────────────────────────────────
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - .:/usr/share/nginx/html:ro
+
+  # ── Node.js WebSocket + Kafka server ──────────────────────────
+  server:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      KAFKA_BROKER: kafka:9092
+    command: sh -c "npm install && node server.js"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ── Kafka (KRaft, no Zookeeper) ────────────────────────────────
   kafka:
     image: apache/kafka:3.7.0
     ports:
@@ -10,7 +36,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1

@@ -12,8 +12,38 @@
 require('dotenv').config();
 
 const http      = require('http');
+const fs        = require('fs');
+const path      = require('path');
 const WebSocket = require('ws');
 const { Kafka } = require('kafkajs');
+
+const MIME = {
+  '.html': 'text/html',
+  '.js':   'text/javascript',
+  '.css':  'text/css',
+  '.png':  'image/png',
+  '.ico':  'image/x-icon',
+};
+
+function serveStatic(req, res) {
+  // "/" → game.html, anything else → filename in project dir
+  const urlPath = req.url === '/' ? '/game.html' : req.url.split('?')[0];
+  const filePath = path.join(__dirname, urlPath);
+  const ext = path.extname(filePath);
+
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(err.code === 'ENOENT' ? 404 : 500);
+      res.end(err.code === 'ENOENT' ? '404 Not Found' : '500 Internal Error');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(data);
+  });
+}
 
 const PORT       = process.env.PORT         || 3000;
 const BROKER     = process.env.KAFKA_BROKER || 'localhost:9092';
@@ -207,10 +237,7 @@ async function main() {
   console.log('✓ Kafka consumer listening');
 
   // ── HTTP + WebSocket server ────────────────────────────────────────────────────
-  const server = http.createServer((_, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
-    res.end('🦀 Crab Racing Server — connect via WebSocket');
-  });
+  const server = http.createServer(serveStatic);
 
   const wss = new WebSocket.Server({ server });
 
@@ -309,7 +336,7 @@ async function main() {
   });
 
   server.listen(PORT, () => {
-    console.log(`\n🦀  Crab Racing server\n    ws://localhost:${PORT}\n`);
+    console.log(`\n🦀  Crab Racing\n    http://localhost:${PORT}  ← open in browser\n    ws://localhost:${PORT}   ← WebSocket\n`);
     if (!KAFKA_USER) {
       console.log('    (using local Kafka — set KAFKA_USER/KAFKA_PASS for Aiven)\n');
     }
