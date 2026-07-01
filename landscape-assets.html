@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crab Racing — Landscape Assets</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0f1e;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8eaf0;
+    min-height: 100vh;
+    padding: 40px 24px 60px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 1.5rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7ec8e3;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #556;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 48px;
+  }
+
+  .section-title {
+    text-align: center;
+    font-size: 0.75rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #3a5a7a;
+    margin-bottom: 24px;
+    position: relative;
+  }
+
+  .section-title::before,
+  .section-title::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 80px;
+    height: 1px;
+    background: #1e2a3a;
+  }
+
+  .section-title::before { right: calc(50% + 90px); }
+  .section-title::after  { left:  calc(50% + 90px); }
+
+  .section {
+    max-width: 900px;
+    margin: 0 auto 56px;
+  }
+
+  .cards-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+  }
+
+  .card {
+    background: #111827;
+    border-radius: 14px;
+    padding: 20px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid #1e2a3a;
+    transition: transform 0.14s, border-color 0.14s;
+    min-width: 140px;
+  }
+
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent, #3a5a7a);
+  }
+
+  .canvas-wrap {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .canvas-wrap canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  .asset-name {
+    font-size: 0.68rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent, #7ec8e3);
+    margin-bottom: 3px;
+    text-align: center;
+  }
+
+  .asset-tag {
+    font-size: 0.58rem;
+    color: #3a5060;
+    letter-spacing: 0.06em;
+    text-align: center;
+    margin-bottom: 10px;
+  }
+
+  .zone-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 10px;
+  }
+
+  .zone-badge {
+    font-size: 0.52rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 10px;
+    border: 1px solid;
+    opacity: 0.7;
+  }
+
+  .effect-text {
+    font-size: 0.56rem;
+    color: #445;
+    text-align: center;
+    line-height: 1.5;
+    max-width: 120px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: #1a2840;
+    border: 1px solid #2a3a50;
+    border-radius: 6px;
+    color: #7ec8e3;
+    padding: 5px 10px;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: background 0.12s;
+  }
+
+  .btn:hover { background: #223050; }
+
+  /* Preview strip */
+  .preview-wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #111827;
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid #1e2a3a;
+  }
+
+  .preview-canvas-wrap {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    overflow: hidden;
+    border-radius: 8px;
+    width: 100%;
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  #preview-canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  .preview-labels {
+    display: flex;
+    margin-top: 10px;
+    font-size: 0.55rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #3a5060;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .zone-label {
+    text-align: center;
+    padding: 4px 2px;
+    border-top: 1px solid #1e2a3a;
+  }
+
+  .dl-all-wrap {
+    text-align: center;
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Landscape Assets &amp; Obstacles</h1>
+<p class="subtitle">Crab Racing v6.0 · 32×32 pixel art · Phaser-ready tiles</p>
+
+<!-- ═══════════════════ TERRAIN TILES ═══════════════════ -->
+<div class="section">
+  <div class="section-title">Ground Tiles</div>
+  <div class="cards-row" id="tiles-row"></div>
+</div>
+
+<!-- ═══════════════════ OBSTACLES ═══════════════════ -->
+<div class="section">
+  <div class="section-title">Obstacles</div>
+  <div class="cards-row" id="obstacles-row"></div>
+</div>
+
+<!-- ═══════════════════ TRACK PREVIEW ═══════════════════ -->
+<div class="section">
+  <div class="section-title">Track Preview Strip</div>
+  <div class="preview-wrap">
+    <div class="preview-canvas-wrap">
+      <canvas id="preview-canvas"></canvas>
+    </div>
+    <div class="preview-labels" id="preview-labels"></div>
+    <div class="dl-all-wrap">
+      <button class="btn" onclick="downloadAll()">↓ Download All Assets (PNG)</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════
+// PIXEL ART UTILITIES
+// ═══════════════════════════════════════════════════
+
+function px(ctx, x, y, c)            { ctx.fillStyle = c; ctx.fillRect(x,      y,      1,        1); }
+function hline(ctx, x1, x2, y, c)   { ctx.fillStyle = c; ctx.fillRect(x1,     y,      x2-x1+1,  1); }
+function vline(ctx, x, y1, y2, c)   { ctx.fillStyle = c; ctx.fillRect(x,      y1,     1,        y2-y1+1); }
+function rect(ctx, x, y, w, h, c)   { ctx.fillStyle = c; ctx.fillRect(x,      y,      w,        h); }
+
+function ellipse(ctx, cx, cy, rx, ry, c) {
+  for (let dy = -ry; dy <= ry; dy++) {
+    for (let dx = -rx; dx <= rx; dx++) {
+      if (dx*dx/(rx*rx) + dy*dy/(ry*ry) <= 1) px(ctx, cx+dx, cy+dy, c);
+    }
+  }
+}
+
+function circle(ctx, cx, cy, r, c) { ellipse(ctx, cx, cy, r, r, c); }
+
+// ═══════════════════════════════════════════════════
+// TERRAIN TILES  (all 32×32, designed to tile)
+// ═══════════════════════════════════════════════════
+
+function drawShore(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#e2d0a8');
+
+  // Lighter sand drifts
+  [[1,2,7,2],[13,10,8,2],[6,19,6,2],[22,24,7,2],[0,28,9,2]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#f0e0c0');
+  });
+
+  // Damp patches (scattered)
+  [[4,7,3,2],[20,4,4,2],[10,22,4,2],[26,16,3,2]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#cec0a0');
+  });
+
+  // Shell fragments
+  function shell(ctx, x, y) {
+    hline(ctx, x, x+2, y, '#ede0c8');
+    px(ctx, x+1, y+1, '#d4c4a4');
+    px(ctx, x, y+1,   '#d4c4a4');
+  }
+  shell(ctx, 7,  20);
+  shell(ctx, 22, 12);
+  shell(ctx, 15, 5);
+  shell(ctx, 4,  27);
+
+  // Tiny water shimmer patches (sky reflection in damp hollows)
+  [[2,14,2,1],[27,8,2,1],[18,28,2,1]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#c0ccd8');
+  });
+
+  // Scattered dark pebble dots
+  [[11,8],[6,16],[25,21],[19,14],[8,30],[28,29]].forEach(([x,y]) => px(ctx, x, y, '#c0b090'));
+}
+
+function drawWetSand(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#c2a668');
+
+  // Wet darkened areas
+  [[0,5,7,3],[14,12,6,3],[24,20,7,3],[8,26,7,2],[20,1,5,2]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#a88c54');
+  });
+
+  // Sky-reflecting puddles
+  function puddle(ctx, x, y, w, h) {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#7898b0');
+    px(ctx, x+1, y, '#9ab4c4');      // highlight
+  }
+  puddle(ctx, 5,  16, 6, 3);
+  puddle(ctx, 20,  8, 5, 2);
+  puddle(ctx, 28, 26, 4, 2);
+
+  // Sand ripple marks (thin horizontal arcs)
+  function ripple(ctx, x, y, len) {
+    hline(ctx, x, x+len-1, y, '#b89858');
+    px(ctx, x + Math.floor(len/2), y-1, '#b89858');
+  }
+  ripple(ctx, 1,  11, 9);
+  ripple(ctx, 15,  4, 8);
+  ripple(ctx, 20, 28, 7);
+  ripple(ctx, 2,  23, 6);
+
+  // Organism holes (tiny dark dots)
+  [[4,10],[18,22],[11,6],[27,18],[7,28]].forEach(([x,y]) => px(ctx, x, y, '#806040'));
+}
+
+function drawDrySand(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#ead4a0');
+
+  // Lighter wind-blown drifts
+  [[0,0,10,2],[15,6,8,2],[4,14,9,2],[20,22,10,2],[0,28,7,2]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#f6e8c4');
+  });
+
+  // Pebbles (2-pixel shapes)
+  [[7,9],[14,19],[22,6],[5,26],[29,14],[17,28],[12,12],[26,23]].forEach(([x,y]) => {
+    px(ctx, x,   y,   '#a89878');
+    px(ctx, x+1, y,   '#988860');
+    px(ctx, x,   y+1, '#988860');
+  });
+
+  // Dry vegetation tufts
+  function tuft(ctx, x, y) {
+    px(ctx, x,   y+2, '#928248');
+    px(ctx, x-1, y+1, '#a09050');
+    px(ctx, x+1, y+1, '#a09050');
+    px(ctx, x,   y,   '#b0a058');
+    px(ctx, x,   y+3, '#786838');
+  }
+  tuft(ctx, 19, 24);
+  tuft(ctx, 10, 14);
+  tuft(ctx, 28,  6);
+
+  // Wind ripple lines (subtle)
+  for (let i = 0; i < 5; i++) {
+    const y = 3 + i*6;
+    for (let x = i%2; x < 32; x += 5) px(ctx, x, y, '#d8c490');
+  }
+}
+
+function drawUndergrowth(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#6a7c40');
+
+  // Soil/earth patches
+  [[0,0,8,4],[14,8,6,5],[26,20,6,6],[4,24,7,4]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#6a5030');
+  });
+
+  // Dark foliage clusters
+  [[8,2,5,4],[22,12,6,5],[5,16,4,5],[26,4,5,4],[16,24,5,4]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#4a5828');
+  });
+
+  // Grass blades (upright, pointing up in top-down = pointing toward camera = short strokes)
+  function blade(ctx, x, y) {
+    px(ctx, x,   y+2, '#8ab048');
+    px(ctx, x,   y+1, '#a0c858');
+    px(ctx, x-1, y,   '#90b84a');
+    px(ctx, x+1, y,   '#90b84a');
+  }
+  [[4,5],[10,1],[16,7],[22,17],[8,23],[28,11],[14,20],[27,27],[2,14],[20,29]].forEach(([x,y]) => blade(ctx, x, y));
+
+  // Leaves / low plants
+  [[3,13],[18,4],[11,17],[25,23],[6,27]].forEach(([x,y]) => {
+    hline(ctx, x, x+2, y, '#507830');
+    px(ctx, x+1, y-1, '#507830');
+  });
+
+  // Bright speck (dew, flower)
+  [[7,9],[22,3],[15,25]].forEach(([x,y]) => px(ctx, x, y, '#c8d860'));
+}
+
+function drawTreeline(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#383028');
+
+  // Exposed roots/bark stripes (dark brown)
+  [[0,2,10,3],[12,12,8,3],[24,4,8,3],[5,22,9,3],[18,18,10,3]].forEach(([x,y,w,h]) => {
+    for (let dy=0; dy<h; dy++) hline(ctx, x, x+w-1, y+dy, '#584830');
+  });
+
+  // Tree canopy blobs (top-down = dark circles with rim)
+  function canopy(ctx, cx, cy, r) {
+    for (let dy=-r; dy<=r; dy++) {
+      for (let dx=-r; dx<=r; dx++) {
+        if (dx*dx + dy*dy <= r*r) {
+          const shade = dy < -1 ? '#4a6030' : dx > 1 && dy > 1 ? '#2a3818' : '#3a5020';
+          px(ctx, cx+dx, cy+dy, shade);
+        }
+      }
+    }
+    // Rim highlight on upper-left arc
+    for (let dx=-r; dx<=-r+3; dx++) {
+      const dy = -Math.round(Math.sqrt(r*r - dx*dx));
+      if (cx+dx >= 0 && cx+dx < 32 && cy+dy >= 0 && cy+dy < 32)
+        px(ctx, cx+dx, cy+dy, '#607840');
+    }
+  }
+  canopy(ctx, 5,  7,  5);
+  canopy(ctx, 22, 9,  6);
+  canopy(ctx, 13, 22, 5);
+  canopy(ctx, 27, 25, 4);
+  canopy(ctx, 1,  22, 4);
+  canopy(ctx, 16,  3, 4);
+
+  // Leaf litter on visible floor
+  [[14, 5],[19,16],[8,14],[27,17],[10,28],[22,28]].forEach(([x,y]) => {
+    px(ctx, x,   y,   '#7a6030');
+    px(ctx, x+1, y+1, '#604820');
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// OBSTACLES  (all 32×32 sprites)
+// ═══════════════════════════════════════════════════
+
+function drawRockCluster(ctx) {
+  // Rock 1: large, center (10,17), 7x5
+  function rock(ctx, cx, cy, rx, ry, mc, hc, sc) {
+    for (let dy=-ry; dy<=ry; dy++) {
+      for (let dx=-rx; dx<=rx; dx++) {
+        if (dx*dx/(rx*rx) + dy*dy/(ry*ry) <= 1) {
+          const c = (dx < -rx*0.4 && dy < 0) ? hc : (dx > rx*0.3 && dy > ry*0.3) ? sc : mc;
+          px(ctx, cx+dx, cy+dy, c);
+        }
+      }
+    }
+    // Hard shadow cast on ground (1px offset south-east)
+    for (let dx=-rx; dx<=rx; dx++) {
+      const y = cy + ry + 1;
+      const x = cx + dx;
+      if (x >= 0 && x < 32 && y < 32 && dx*dx/(rx*rx) <= 1)
+        px(ctx, x, y, '#30302880');
+    }
+  }
+  // Rock 1: large, teal-grey
+  rock(ctx, 10, 18, 7, 5, '#7a7868', '#aca998', '#525040');
+  // Rock 2: medium, top-right, warm grey
+  rock(ctx, 22, 11, 5, 4, '#888870', '#b0ac98', '#585848');
+  // Rock 3: small, bottom-right
+  rock(ctx, 24, 24, 4, 3, '#808070', '#a8a490', '#545450');
+
+  // Dark gap between rocks
+  for (let y=14; y<=17; y++) px(ctx, 15, y, '#28281e');
+  for (let y=16; y<=19; y++) px(ctx, 16, y, '#28281e');
+}
+
+function drawCrabHole(ctx) {
+  // Disturbed sand surround
+  ellipse(ctx, 16, 17, 13, 10, '#c8a860');
+
+  // Scattered disturbed grains
+  [[5,9],[8,8],[24,8],[27,11],[25,24],[6,25],[14,27],[20,6]].forEach(([x,y]) => {
+    hline(ctx, x, x+1, y, '#dcc080');
+  });
+
+  // Rim of hole (paler displaced sand)
+  ellipse(ctx, 16, 17, 8, 6, '#d8ba70');
+
+  // The dark hole
+  for (let dy=-4; dy<=4; dy++) {
+    for (let dx=-6; dx<=6; dx++) {
+      if (dx*dx/36 + dy*dy/16 <= 1) {
+        const dist = Math.sqrt(dx*dx/36 + dy*dy/16);
+        const c = dist < 0.45 ? '#080604' : dist < 0.75 ? '#140e08' : '#201808';
+        px(ctx, 16+dx, 17+dy, c);
+      }
+    }
+  }
+
+  // Sand mound thrown out (upper-right of hole)
+  [[19,9],[20,9],[21,9],[18,10],[19,10],[20,10],[21,10],[22,10]].forEach(([x,y]) => px(ctx, x, y, '#eed898'));
+  [[19,8],[20,8],[21,8]].forEach(([x,y]) => px(ctx, x, y, '#f8eebc'));
+
+  // Tiny ejected grains
+  [[9,14],[26,20],[10,22],[24,11]].forEach(([x,y]) => px(ctx, x, y, '#e8d480'));
+}
+
+function drawJellyfish(ctx) {
+  const CX = 16, CY = 12;
+
+  // Outer translucent rim
+  circle(ctx, CX, CY, 9, '#c098f0');
+  // Main bell
+  circle(ctx, CX, CY, 8, '#a070d8');
+  // Inner bell
+  circle(ctx, CX, CY, 6, '#8050c0');
+  // Central stomach (darker)
+  circle(ctx, CX, CY, 3, '#5030a0');
+
+  // Radial veins (8 ribs)
+  for (let angle = 0; angle < 360; angle += 45) {
+    const rad = angle * Math.PI / 180;
+    for (let r = 3; r <= 8; r++) {
+      const x = Math.round(CX + r * Math.cos(rad));
+      const y = Math.round(CY + r * Math.sin(rad));
+      if (x >= 0 && x < 32 && y >= 0 && y < 32) px(ctx, x, y, '#7040b8');
+    }
+  }
+
+  // Highlight on bell (top-left)
+  px(ctx, CX-4, CY-5, '#e0c0ff');
+  px(ctx, CX-3, CY-6, '#e0c0ff');
+  px(ctx, CX-5, CY-4, '#d0b0f8');
+
+  // Tentacles trailing south (from the bell's underside, ~y=21 down to ~28)
+  const TC = '#7040a0';
+  const TL = '#9060c0';
+  // 6 tentacles with subtle waviness
+  const tentX = [10, 13, 15, 17, 19, 22];
+  tentX.forEach((tx, i) => {
+    for (let ty = 21; ty <= 27 - (i % 3 === 0 ? 2 : 0); ty++) {
+      const wx = tx + (i % 2 === 0 ? (ty > 24 ? 1 : 0) : (ty > 23 ? -1 : 0));
+      if (wx >= 0 && wx < 32) px(ctx, wx, ty, i % 3 === 1 ? TL : TC);
+    }
+  });
+  // Side curling tentacles
+  for (let ty = 21; ty <= 25; ty++) px(ctx, 8 + (ty-21 > 2 ? -1 : 0), ty, TC);
+  for (let ty = 21; ty <= 24; ty++) px(ctx, 24 + (ty > 22 ? 1 : 0), ty, TC);
+}
+
+function drawBeachSetup(ctx) {
+  // Beach towel (stripes, center-bottom of frame)
+  for (let dy = 0; dy < 9; dy++) {
+    for (let dx = 0; dx < 16; dx++) {
+      const stripe = Math.floor((dx + dy * 0.5) / 2) % 3;
+      const colors = ['#e04888', '#f0d830', '#38a8e8'];
+      px(ctx, 8+dx, 18+dy, colors[stripe]);
+    }
+  }
+  // Towel border
+  hline(ctx, 7, 24, 17, '#c03870');
+  hline(ctx, 7, 24, 27, '#c03870');
+  vline(ctx, 7, 17, 27, '#c03870');
+  vline(ctx, 24, 17, 27, '#c03870');
+
+  // Towel fringe
+  for (let x = 8; x < 24; x += 2) {
+    px(ctx, x, 28, '#c03870');
+    px(ctx, x, 16, '#c03870');
+  }
+
+  // Umbrella (top-down circle, alternating wedge segments)
+  const UCX = 11, UCY = 9, UR = 7;
+  for (let dy = -UR; dy <= UR; dy++) {
+    for (let dx = -UR; dx <= UR; dx++) {
+      if (dx*dx + dy*dy <= UR*UR) {
+        const angle = Math.atan2(dy, dx);
+        const seg = Math.floor((angle + Math.PI) / (Math.PI / 3));
+        const c = seg % 2 === 0 ? '#e02818' : '#f4f0e0';
+        px(ctx, UCX+dx, UCY+dy, c);
+      }
+    }
+  }
+  // Umbrella center pole
+  rect(ctx, UCX, UCY, 2, 2, '#804028');
+  // Pole shaft connecting to ground (tiny vertical line)
+  vline(ctx, UCX, UCY+2, UCY+4, '#a06038');
+
+  // Panicking human (stick figure running right, arms up)
+  // Head
+  rect(ctx, 24, 6, 3, 3, '#e8b880');
+  // Expression dot
+  px(ctx, 25, 8, '#403020');
+  // Body
+  rect(ctx, 25, 9, 2, 3, '#3860c8');
+  // Left arm raised high
+  px(ctx, 23, 8, '#e8b880');
+  px(ctx, 22, 7, '#e8b880');
+  // Right arm raised high
+  px(ctx, 28, 7, '#e8b880');
+  px(ctx, 29, 6, '#e8b880');
+  // Left leg (striding forward)
+  px(ctx, 24, 12, '#3860c8');
+  px(ctx, 23, 13, '#3860c8');
+  px(ctx, 23, 14, '#e8b880');
+  // Right leg (kicked back)
+  px(ctx, 26, 12, '#3860c8');
+  px(ctx, 27, 13, '#3860c8');
+  px(ctx, 28, 14, '#e8b880');
+
+  // Exclamation mark above head
+  rect(ctx, 26, 1, 1, 3, '#f8e030');
+  px(ctx, 26, 5, '#f8e030');
+
+  // Sunscreen bottle on towel (toppled)
+  rect(ctx, 18, 20, 2, 5, '#40c040');
+  rect(ctx, 18, 19, 2, 2, '#30a030');
+  px(ctx, 19, 19, '#70e870');
+}
+
+function drawFishingNet(ctx) {
+  const NET   = '#c09848';
+  const KNOT  = '#906820';
+  const FLOAT = '#e03820';
+  const FLOATL = '#f05840';
+  const ROPE  = '#a08038';
+
+  // Border rope
+  hline(ctx, 0, 31, 0,  ROPE);
+  hline(ctx, 0, 31, 31, ROPE);
+  vline(ctx, 0,  0, 31, ROPE);
+  vline(ctx, 31, 0, 31, ROPE);
+
+  // NW→SE diagonal net lines (slope +1)
+  for (let offset = -30; offset < 32; offset += 6) {
+    for (let t = 0; t < 32; t++) {
+      const x = t, y = t + offset;
+      if (x > 0 && x < 31 && y > 0 && y < 31) px(ctx, x, y, NET);
+    }
+  }
+
+  // NE→SW diagonal net lines (slope -1)
+  for (let sum = 4; sum < 62; sum += 6) {
+    for (let x = 1; x < 31; x++) {
+      const y = sum - x;
+      if (y > 0 && y < 31) px(ctx, x, y, NET);
+    }
+  }
+
+  // Knot markers at intersections (where both line families cross)
+  for (let offset = -30; offset < 32; offset += 6) {
+    for (let sum = 4; sum < 62; sum += 6) {
+      // Intersection: x + offset = -(x - sum) → 2x = sum - offset → x = (sum-offset)/2
+      const x = (sum - offset) / 2;
+      const y = x + offset;
+      if (Number.isInteger(x) && x > 0 && x < 31 && y > 0 && y < 31)
+        px(ctx, Math.round(x), Math.round(y), KNOT);
+    }
+  }
+
+  // Float markers
+  function float(ctx, x, y) {
+    rect(ctx, x, y, 4, 3, FLOAT);
+    px(ctx, x+1, y,   FLOATL);
+    px(ctx, x,   y+1, FLOATL);
+  }
+  float(ctx, 0,  0);   // top-left
+  float(ctx, 28, 0);   // top-right
+  float(ctx, 0,  28);  // bottom-left
+  float(ctx, 28, 28);  // bottom-right
+  float(ctx, 13, 0);   // top-mid
+  float(ctx, 13, 28);  // bottom-mid
+  float(ctx, 0,  13);  // left-mid
+  float(ctx, 28, 13);  // right-mid
+}
+
+// ═══════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════
+
+const TILES = [
+  {
+    id: 'shore',
+    name: 'Shore',
+    tag: 'Start zone — no obstacles',
+    accent: '#7ec8e3',
+    draw: drawShore,
+  },
+  {
+    id: 'wet-sand',
+    name: 'Wet Sand',
+    tag: 'Zone 2',
+    accent: '#60b8d8',
+    draw: drawWetSand,
+  },
+  {
+    id: 'dry-sand',
+    name: 'Dry Sand',
+    tag: 'Zone 3',
+    accent: '#dbb848',
+    draw: drawDrySand,
+  },
+  {
+    id: 'undergrowth',
+    name: 'Undergrowth',
+    tag: 'Zone 4',
+    accent: '#80c040',
+    draw: drawUndergrowth,
+  },
+  {
+    id: 'treeline',
+    name: 'Treeline',
+    tag: 'Finish zone',
+    accent: '#58c028',
+    draw: drawTreeline,
+  },
+];
+
+const OBSTACLES = [
+  {
+    id: 'rock-cluster',
+    name: 'Rock Cluster',
+    accent: '#a8a890',
+    zones: [{ label: 'Wet Sand', c: '#60b8d8' }, { label: 'Dry Sand', c: '#dbb848' }, { label: 'Undergrowth', c: '#80c040' }],
+    effect: 'Speed penalty\nBlocks projectiles\nImmune: Size ≥ 5',
+    bg: 'dry-sand',
+    draw: drawRockCluster,
+  },
+  {
+    id: 'crab-hole',
+    name: 'Crab Hole',
+    accent: '#c8b060',
+    zones: [{ label: 'Wet Sand', c: '#60b8d8' }],
+    effect: 'Traps small crabs\n2–4 turns\nImmune: Size ≥ 4',
+    bg: 'wet-sand',
+    draw: drawCrabHole,
+  },
+  {
+    id: 'jellyfish',
+    name: 'Jellyfish Patch',
+    accent: '#b070e0',
+    zones: [{ label: 'Wet Sand', c: '#60b8d8' }],
+    effect: 'Dmg 4 · Stun 1–2 turns\nSpeed ½ for 2 turns\nNo immunity',
+    bg: 'wet-sand',
+    draw: drawJellyfish,
+  },
+  {
+    id: 'beach-setup',
+    name: 'Beach Setup',
+    accent: '#e04888',
+    zones: [{ label: 'Dry Sand', c: '#dbb848' }],
+    effect: 'Dmg 3/turn while trapped\nTraps large crabs\nImmune: Size ≤ 3',
+    bg: 'dry-sand',
+    draw: drawBeachSetup,
+  },
+  {
+    id: 'fishing-net',
+    name: 'Fishing Net',
+    accent: '#c09848',
+    zones: [{ label: 'Dry Sand', c: '#dbb848' }, { label: 'Undergrowth', c: '#80c040' }],
+    effect: 'No damage\nTraps all crabs 2–3 turns\nNo immunity',
+    bg: 'undergrowth',
+    draw: drawFishingNet,
+  },
+];
+
+// ═══════════════════════════════════════════════════
+// TILE OFFSCREEN CACHE
+// ═══════════════════════════════════════════════════
+
+const tileCache = {};
+
+function getTileCanvas(id) {
+  if (tileCache[id]) return tileCache[id];
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const tile = TILES.find(t => t.id === id);
+  if (tile) tile.draw(ctx);
+  tileCache[id] = c;
+  return c;
+}
+
+// ═══════════════════════════════════════════════════
+// RENDERING HELPERS
+// ═══════════════════════════════════════════════════
+
+const DISPLAY_SCALE = 4; // display each 32×32 tile at 128×128
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+
+function renderAt4x(drawFn, bgId) {
+  // Native 32×32
+  const native = makeCanvas(32, 32);
+  const nCtx = native.getContext('2d');
+  nCtx.imageSmoothingEnabled = false;
+  // Draw bg tile first if requested
+  if (bgId) {
+    const bgCanvas = getTileCanvas(bgId);
+    nCtx.drawImage(bgCanvas, 0, 0);
+  }
+  drawFn(nCtx);
+
+  // Scale up to 128×128 for display
+  const display = makeCanvas(32 * DISPLAY_SCALE, 32 * DISPLAY_SCALE);
+  const dCtx = display.getContext('2d');
+  dCtx.imageSmoothingEnabled = false;
+  dCtx.drawImage(native, 0, 0, 32 * DISPLAY_SCALE, 32 * DISPLAY_SCALE);
+  return { native, display };
+}
+
+function addDownload(button, nativeCanvas, name) {
+  button.addEventListener('click', () => {
+    const link = document.createElement('a');
+    link.download = `${name}.png`;
+    link.href = nativeCanvas.toDataURL('image/png');
+    link.click();
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// BUILD TILE CARDS
+// ═══════════════════════════════════════════════════
+
+const tilesRow = document.getElementById('tiles-row');
+
+TILES.forEach(tile => {
+  const { native, display } = renderAt4x(tile.draw, null);
+  tileCache[tile.id] = native; // cache native for preview
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.setProperty('--accent', tile.accent);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'canvas-wrap';
+  wrap.appendChild(display);
+
+  const name = document.createElement('div');
+  name.className = 'asset-name';
+  name.textContent = tile.name;
+
+  const tag = document.createElement('div');
+  tag.className = 'asset-tag';
+  tag.textContent = tile.tag;
+
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.textContent = '↓ PNG';
+  addDownload(btn, native, `tile-${tile.id}`);
+
+  card.append(wrap, name, tag, btn);
+  tilesRow.appendChild(card);
+});
+
+// ═══════════════════════════════════════════════════
+// BUILD OBSTACLE CARDS
+// ═══════════════════════════════════════════════════
+
+const obstaclesRow = document.getElementById('obstacles-row');
+
+OBSTACLES.forEach(obs => {
+  const { native, display } = renderAt4x(obs.draw, obs.bg);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.setProperty('--accent', obs.accent);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'canvas-wrap';
+  wrap.appendChild(display);
+
+  const name = document.createElement('div');
+  name.className = 'asset-name';
+  name.textContent = obs.name;
+
+  // Zone badges
+  const badges = document.createElement('div');
+  badges.className = 'zone-badges';
+  obs.zones.forEach(z => {
+    const badge = document.createElement('span');
+    badge.className = 'zone-badge';
+    badge.style.color = z.c;
+    badge.style.borderColor = z.c;
+    badge.textContent = z.label;
+    badges.appendChild(badge);
+  });
+
+  // Effect text
+  const effect = document.createElement('div');
+  effect.className = 'effect-text';
+  effect.innerHTML = obs.effect.replace(/\n/g, '<br>');
+
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.textContent = '↓ PNG';
+  addDownload(btn, native, `obstacle-${obs.id}`);
+
+  card.append(wrap, name, badges, effect, btn);
+  obstaclesRow.appendChild(card);
+});
+
+// ═══════════════════════════════════════════════════
+// TRACK PREVIEW STRIP
+// ═══════════════════════════════════════════════════
+
+// Layout: 15 tiles wide × 3 tiles tall
+// Zones:  Shore(2) · Wet Sand(4) · Dry Sand(4) · Undergrowth(3) · Treeline(2)
+
+const PREVIEW_COLS = 15;
+const PREVIEW_ROWS = 3;
+const T = 32; // tile size
+
+const pCanvas = document.getElementById('preview-canvas');
+pCanvas.width  = PREVIEW_COLS * T;
+pCanvas.height = PREVIEW_ROWS * T;
+pCanvas.style.width  = `${PREVIEW_COLS * T * 2}px`;
+pCanvas.style.height = `${PREVIEW_ROWS * T * 2}px`;
+
+const pCtx = pCanvas.getContext('2d');
+pCtx.imageSmoothingEnabled = false;
+
+// Zone column ranges
+const zones = [
+  { id: 'shore',       cols: [0, 1]   },
+  { id: 'wet-sand',    cols: [2, 5]   },
+  { id: 'dry-sand',    cols: [6, 9]   },
+  { id: 'undergrowth', cols: [10, 12] },
+  { id: 'treeline',    cols: [13, 14] },
+];
+
+// Fill ground tiles
+for (let row = 0; row < PREVIEW_ROWS; row++) {
+  for (let col = 0; col < PREVIEW_COLS; col++) {
+    const zone = zones.find(z => col >= z.cols[0] && col <= z.cols[1]);
+    if (!zone) continue;
+    const tileSrc = getTileCanvas(zone.id);
+    pCtx.drawImage(tileSrc, col * T, row * T);
+  }
+}
+
+// Draw obstacles in appropriate zones (centered in cells)
+function placeObstacle(drawFn, col, row) {
+  const zone = zones.find(z => col >= z.cols[0] && col <= z.cols[1]);
+  if (!zone) return;
+  const bgCanvas = getTileCanvas(zone.id);
+  const tmpCanvas = makeCanvas(T, T);
+  const tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.imageSmoothingEnabled = false;
+  tmpCtx.drawImage(bgCanvas, 0, 0);
+  drawFn(tmpCtx);
+  pCtx.drawImage(tmpCanvas, col * T, row * T);
+}
+
+placeObstacle(drawCrabHole,    3, 1);
+placeObstacle(drawJellyfish,   4, 0);
+placeObstacle(drawCrabHole,    5, 2);
+placeObstacle(drawRockCluster, 7, 1);
+placeObstacle(drawBeachSetup,  8, 0);
+placeObstacle(drawRockCluster, 9, 2);
+placeObstacle(drawFishingNet, 10, 1);
+placeObstacle(drawRockCluster,11, 0);
+placeObstacle(drawFishingNet, 12, 2);
+
+// Start line (left edge of shore)
+const startX = 2;
+for (let row = 0; row < PREVIEW_ROWS; row++) {
+  hline(pCtx, startX, startX, row * T,     (row * T) + 31, '#f0f0e0');
+  // Checkerboard start flag
+  for (let ty = 0; ty < T; ty++) {
+    const c = ((Math.floor(ty/4) + Math.floor(startX/4)) % 2 === 0) ? '#f0f0e0' : '#202020';
+    for (let tx = startX; tx <= startX+3; tx++) px(pCtx, tx, row*T+ty, c);
+  }
+}
+
+// Finish line (right edge of treeline)
+const finX = (PREVIEW_COLS - 2) * T;
+for (let row = 0; row < PREVIEW_ROWS; row++) {
+  for (let ty = 0; ty < T; ty++) {
+    const c = ((Math.floor(ty/4) + Math.floor((finX)/4)) % 2 === 0) ? '#f8e840' : '#202020';
+    for (let tx = finX; tx <= finX+3; tx++) px(pCtx, tx, row*T+ty, c);
+  }
+}
+
+// Zone labels beneath preview
+const labelsDiv = document.getElementById('preview-labels');
+const labelData = [
+  { text: 'Shore',       cols: 2, color: '#7ec8e3' },
+  { text: 'Wet Sand',    cols: 4, color: '#60b8d8' },
+  { text: 'Dry Sand',    cols: 4, color: '#dbb848' },
+  { text: 'Undergrowth', cols: 3, color: '#80c040' },
+  { text: 'Treeline',    cols: 2, color: '#58c028' },
+];
+labelData.forEach(z => {
+  const div = document.createElement('div');
+  div.className = 'zone-label';
+  div.style.color = z.color;
+  div.style.width = `${z.cols * T * 2}px`;
+  div.textContent = z.text;
+  labelsDiv.appendChild(div);
+});
+
+// ═══════════════════════════════════════════════════
+// DOWNLOAD ALL
+// ═══════════════════════════════════════════════════
+
+function downloadAll() {
+  const allAssets = [
+    ...TILES.map(t => ({ fn: t.draw, bg: null,   name: `tile-${t.id}` })),
+    ...OBSTACLES.map(o => ({ fn: o.draw, bg: o.bg, name: `obstacle-${o.id}` })),
+  ];
+
+  allAssets.forEach((a, i) => {
+    setTimeout(() => {
+      const c = makeCanvas(32, 32);
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      if (a.bg) ctx.drawImage(getTileCanvas(a.bg), 0, 0);
+      a.fn(ctx);
+      const link = document.createElement('a');
+      link.download = `${a.name}.png`;
+      link.href = c.toDataURL('image/png');
+      link.click();
+    }, i * 120);
+  });
+
+  // Also download track preview
+  setTimeout(() => {
+    const link = document.createElement('a');
+    link.download = 'track-preview.png';
+    link.href = pCanvas.toDataURL('image/png');
+    link.click();
+  }, allAssets.length * 120);
+}
+</script>
+</body>
+</html>

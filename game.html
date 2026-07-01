@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Crab Racing</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0f1e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script>
+'use strict';
+
+// ─── pixel art helpers ────────────────────────────────────────────────────────
+function px(ctx,x,y,c)         { ctx.fillStyle=c; ctx.fillRect(x,y,1,1); }
+function hline(ctx,x1,x2,y,c) { ctx.fillStyle=c; ctx.fillRect(x1,y,x2-x1+1,1); }
+function vline(ctx,x,y1,y2,c) { ctx.fillStyle=c; ctx.fillRect(x,y1,1,y2-y1+1); }
+function rect(ctx,x,y,w,h,c)  { ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
+function ellipse(ctx,cx,cy,rx,ry,c) {
+  for (let dy=-ry; dy<=ry; dy++)
+    for (let dx=-rx; dx<=rx; dx++)
+      if (dx*dx/(rx*rx)+dy*dy/(ry*ry)<=1) px(ctx,cx+dx,cy+dy,c);
+}
+function circle(ctx,cx,cy,r,c) { ellipse(ctx,cx,cy,r,r,c); }
+
+function makeCanvas(w,h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  return { canvas: c, ctx };
+}
+
+// ─── terrain tile generators (32×32) ─────────────────────────────────────────
+function drawShore(ctx) {
+  rect(ctx,0,0,32,32,'#d4c898');
+  for (let i=0; i<32; i+=4) hline(ctx,0,31,i,'#c8bc88');
+  rect(ctx,0,27,32,5,'#6898b8');
+  hline(ctx,3,28,28,'#88b8d0');
+}
+function drawWetSand(ctx) {
+  rect(ctx,0,0,32,32,'#b89a58');
+  for (let y=0; y<32; y+=5) hline(ctx,2,29,y,'#a88848');
+  ellipse(ctx,18,20,7,4,'#6888a8');
+}
+function drawDrySand(ctx) {
+  rect(ctx,0,0,32,32,'#e0c870');
+  px(ctx,7,7,'#c8a858'); px(ctx,19,17,'#c8a858');
+  px(ctx,13,25,'#c8a858'); px(ctx,25,5,'#c8a858');
+}
+function drawUndergrowth(ctx) {
+  rect(ctx,0,0,32,32,'#587038');
+  circle(ctx,7,8,4,'#78a040'); circle(ctx,24,20,5,'#689038');
+  circle(ctx,18,7,3,'#88b048'); circle(ctx,5,24,4,'#78a040');
+}
+function drawTreeline(ctx) {
+  rect(ctx,0,0,32,32,'#2a3020');
+  circle(ctx,9,10,7,'#384828'); circle(ctx,23,22,7,'#304020');
+  circle(ctx,25,8,5,'#405830'); circle(ctx,5,23,5,'#384828');
+}
+function drawFinish(ctx) {
+  for (let y=0; y<32; y++)
+    for (let x=0; x<32; x++)
+      px(ctx,x,y, ((Math.floor(x/4)+Math.floor(y/4))%2===0) ? '#f0f0e0' : '#202020');
+}
+
+// ─── spider crab sprite sheet ─────────────────────────────────────────────────
+// 4 frames × 32px = 128×32 canvas
+// Body vertical (perpendicular to movement), legs cycle left/right
+function makeCrabSheet() {
+  const { canvas, ctx } = makeCanvas(128, 32);
+  const BODY  = '#4a80a0';
+  const BODYH = '#68a0c0';
+  const LEG   = '#3870a0';
+  const TIP   = '#90c0d8';
+
+  for (let f = 0; f < 4; f++) {
+    const ox    = f * 32;
+    const phase = f * Math.PI / 2;
+
+    // 4 leg pairs
+    for (let i = 0; i < 4; i++) {
+      const legY = 8 + i * 5;
+      const lLen = 5 + Math.round(2 * Math.sin(phase + i * 0.9));
+      const rLen = 5 + Math.round(2 * Math.sin(phase + i * 0.9 + Math.PI));
+      hline(ctx, ox+9-lLen, ox+9,      legY, LEG);
+      hline(ctx, ox+22,     ox+22+rLen, legY, LEG);
+      px(ctx, ox+9-lLen,  legY, TIP);
+      px(ctx, ox+22+rLen, legY, TIP);
+    }
+
+    // Body
+    ellipse(ctx, ox+16, 16, 6, 10, BODY);
+    ellipse(ctx, ox+15, 14,  4,  7, BODYH);
+
+    // Eyes
+    px(ctx, ox+21, 11, '#f0f0f0'); px(ctx, ox+22, 11, '#202020');
+    px(ctx, ox+21, 21, '#f0f0f0'); px(ctx, ox+22, 21, '#202020');
+
+    // Claws (top + bottom)
+    hline(ctx, ox+11, ox+21, 3,  LEG);
+    hline(ctx, ox+12, ox+20, 4,  BODY);
+    hline(ctx, ox+11, ox+21, 5,  LEG);
+    hline(ctx, ox+11, ox+21, 27, LEG);
+    hline(ctx, ox+12, ox+20, 28, BODY);
+    hline(ctx, ox+11, ox+21, 29, LEG);
+  }
+  return canvas;
+}
+
+// ─── obstacle sprite generators (32×32, transparent bg) ─────────────────────
+function drawRock(ctx) {
+  ellipse(ctx, 19, 20, 12, 9, '#706858');
+  ellipse(ctx, 13, 16,  8, 6, '#908878');
+  px(ctx, 11, 14, '#b8b0a0'); px(ctx, 12, 13, '#b8b0a0');
+}
+function drawHole(ctx) {
+  circle(ctx, 16, 18, 11, '#3a2810');
+  circle(ctx, 16, 18,  8, '#1e1408');
+  circle(ctx, 16, 18,  4, '#080400');
+  for (let a = 200; a <= 340; a += 25) {
+    const r = a * Math.PI / 180;
+    px(ctx, Math.round(16 + 11*Math.cos(r)), Math.round(18 + 11*Math.sin(r)), '#604828');
+  }
+}
+function drawJelly(ctx) {
+  ellipse(ctx, 16, 13, 10, 7, '#c050b8');
+  ellipse(ctx, 16, 11,  6, 4, '#e890d8');
+  for (let i = 0; i < 5; i++) {
+    const x = 8 + i * 4;
+    const len = 6 + (i % 2) * 3;
+    vline(ctx, x, 20, 20 + len, '#a040a0');
+    px(ctx, x, 20 + len, '#e070d0');
+  }
+}
+function drawBeach(ctx) {
+  vline(ctx, 16, 9, 26, '#c09060');
+  for (let r = 0; r <= 8; r++)
+    hline(ctx, 16-r, 16+r, 9+r, r%2===0 ? '#e02828' : '#f0f0f0');
+  rect(ctx, 9, 22, 15, 6, '#3888d0');
+  hline(ctx, 9, 23, 24, '#60a8f0');
+}
+function drawNet(ctx) {
+  const C = '#b08838';
+  for (let x = 4; x <= 28; x += 4) vline(ctx, x, 8, 24, C);
+  for (let y = 8; y <= 24; y += 4) hline(ctx, 4, 28, y, C);
+  for (let x = 4; x <= 28; x += 4)
+    for (let y = 8; y <= 24; y += 4)
+      px(ctx, x, y, '#d0a850');
+}
+
+// ─── obstacle definitions ─────────────────────────────────────────────────────
+// effect: 'block' = can't enter | 'stun' = frozen N turns | 'push' = bounced back
+const OBSTACLES = [
+  { cell: 7,  lane: 0, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'   },
+  { cell: 9,  lane: 2, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
+  { cell: 11, lane: 1, type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'   },
+  { cell: 15, lane: 1, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 17, lane: 0, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
+  { cell: 19, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 22, lane: 1, type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!'},
+  { cell: 26, lane: 0, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
+  { cell: 28, lane: 2, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
+  { cell: 30, lane: 1, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
+  { cell: 33, lane: 0, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 36, lane: 2, type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'  },
+  { cell: 39, lane: 1, type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!' },
+  { cell: 41, lane: 0, type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'             },
+];
+
+// fast lookup: "cell,lane" → obstacle
+const OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
+
+// ─── track ────────────────────────────────────────────────────────────────────
+const CELL  = 32;
+const LANES = 3;
+const ZONES = [
+  { tile: 'shore',       len: 5  },
+  { tile: 'wetSand',     len: 8  },
+  { tile: 'drySand',     len: 12 },
+  { tile: 'undergrowth', len: 10 },
+  { tile: 'treeline',    len: 8  },
+  { tile: 'finish',      len: 3  },
+];
+const TRACK       = [];
+for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
+const TOTAL_CELLS = TRACK.length;
+const FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
+
+// ─── scene ────────────────────────────────────────────────────────────────────
+class RaceScene extends Phaser.Scene {
+  constructor() { super('Race'); }
+
+  // No preload — all textures created synchronously in create()
+  create() {
+    // ── register textures directly (no loader, no async) ──────
+    const tileDrawers = { shore: drawShore, wetSand: drawWetSand, drySand: drawDrySand,
+                          undergrowth: drawUndergrowth, treeline: drawTreeline, finish: drawFinish };
+    for (const [key, fn] of Object.entries(tileDrawers)) {
+      const { canvas, ctx } = makeCanvas(32, 32);
+      fn(ctx);
+      this.textures.addCanvas(key, canvas);
+    }
+
+    // obstacle textures
+    const obDrawers = { rock: drawRock, hole: drawHole, jelly: drawJelly,
+                        beach: drawBeach, net: drawNet };
+    for (const [key, fn] of Object.entries(obDrawers)) {
+      const { canvas, ctx } = makeCanvas(32, 32);
+      fn(ctx);
+      this.textures.addCanvas('ob_' + key, canvas);
+    }
+
+    // Crab spritesheet: addCanvas then attach frame definitions manually
+    const crabCanvas = makeCrabSheet();
+    const crabTex    = this.textures.addCanvas('crab', crabCanvas);
+    for (let i = 0; i < 4; i++) crabTex.add(i, 0, i * 32, 0, 32, 32);
+
+    // ── scene state ───────────────────────────────────────────
+    const { width: W, height: H } = this.scale;
+    const trackTop = Math.floor((H - LANES * CELL) / 2);
+    const midLane  = Math.floor(LANES / 2);
+    this.cell      = 0;
+    this.lane         = midLane;
+    this.trackTop     = trackTop;
+    this.busy         = false;
+    this.won          = false;
+    this.stunTurns    = 0;
+    this.raceTime     = 0;
+    this.timerStarted = false;
+    this.timerEvent   = null;
+
+    // ── terrain ───────────────────────────────────────────────
+    for (let cx = 0; cx < TOTAL_CELLS; cx++)
+      for (let lane = 0; lane < LANES; lane++)
+        this.add.image(cx * CELL + 16, trackTop + lane * CELL + 16, TRACK[cx]);
+
+    // Track border
+    const gfx = this.add.graphics();
+    gfx.fillStyle(0x000000);
+    gfx.fillRect(0, trackTop - 2,            TOTAL_CELLS * CELL, 2);
+    gfx.fillRect(0, trackTop + LANES * CELL, TOTAL_CELLS * CELL, 2);
+
+    // ── obstacles ─────────────────────────────────────────────
+    this.obSprites = new Map();
+    for (const o of OBSTACLES) {
+      const spr = this.add.image(
+        o.cell * CELL + 16,
+        trackTop + o.lane * CELL + 16,
+        'ob_' + o.type
+      );
+      this.obSprites.set(`${o.cell},${o.lane}`, spr);
+    }
+
+    // ── crab ──────────────────────────────────────────────────
+    this.crab = this.add.sprite(16, trackTop + midLane * CELL + 16, 'crab');
+    this.crab.setFrame(0);
+
+    this.anims.create({
+      key: 'walk',
+      frames: [
+        { key: 'crab', frame: 0 },
+        { key: 'crab', frame: 1 },
+        { key: 'crab', frame: 2 },
+        { key: 'crab', frame: 3 },
+      ],
+      frameRate: 10,
+      repeat: -1,
+    });
+
+    // ── camera ────────────────────────────────────────────────
+    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELL, H);
+    this.cameras.main.startFollow(this.crab, true, 0.1, 1);
+    this.cameras.main.setDeadzone(60, 500);
+
+    // ── input ─────────────────────────────────────────────────
+    this.input.keyboard.on('keydown-SPACE',  () => this.move( 1,  0));
+    this.input.keyboard.on('keydown-RIGHT',  () => this.move( 1,  0));
+    this.input.keyboard.on('keydown-LEFT',   () => this.move(-1,  0));
+    this.input.keyboard.on('keydown-UP',     () => this.move( 0, -1));
+    this.input.keyboard.on('keydown-DOWN',   () => this.move( 0,  1));
+    this.input.keyboard.on('keydown-W',      () => this.move( 0, -1));
+    this.input.keyboard.on('keydown-S',      () => this.move( 0,  1));
+    this.input.keyboard.on('keydown-A',      () => this.move(-1,  0));
+    this.input.keyboard.on('keydown-D',      () => this.move( 1,  0));
+    this.input.on('pointerdown', () => this.move(1, 0));
+
+    // ── HUD ───────────────────────────────────────────────────
+    this.hudText = this.add.text(8, 8, '', {
+      fontFamily: 'monospace', fontSize: '9px',
+      color: '#7ec8e3', stroke: '#000', strokeThickness: 2,
+    }).setScrollFactor(0);
+
+    this.statusText = this.add.text(W / 2, 8, '', {
+      fontFamily: 'monospace', fontSize: '9px',
+      color: '#ff6060', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(0.5, 0).setScrollFactor(0);
+
+    this.timerText = this.add.text(W - 8, 8, '0:00.00', {
+      fontFamily: 'monospace', fontSize: '9px',
+      color: '#e8e030', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(1, 0).setScrollFactor(0);
+
+    this.add.text(W / 2, H - 6, '← → move  ↑ ↓ shift lane  (WASD / arrows)', {
+      fontFamily: 'monospace', fontSize: '8px',
+      color: '#ffffff', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(0.5, 1).setScrollFactor(0);
+
+    this.refreshHUD();
+  }
+
+  move(dx, dlane) {
+    if (this.busy || this.won) return;
+
+    // start timer on first move
+    if (!this.timerStarted) {
+      this.timerStarted = true;
+      this.timerEvent = this.time.addEvent({
+        delay: 10,
+        loop: true,
+        callback: () => {
+          this.raceTime++;
+          const cs  = this.raceTime % 100;
+          const sec = Math.floor(this.raceTime / 100);
+          const m   = Math.floor(sec / 60);
+          const s   = sec % 60;
+          this.timerText.setText(
+            `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`
+          );
+        },
+      });
+    }
+
+    // stun: count down and flash
+    if (this.stunTurns > 0) {
+      this.stunTurns--;
+      this.cameras.main.shake(120, 0.006);
+      const left = this.stunTurns;
+      this.statusText.setText(left > 0 ? `STUNNED — ${left} turn${left > 1 ? 's' : ''} left` : 'RECOVERED!');
+      if (left === 0) this.time.delayedCall(600, () => this.statusText.setText(''));
+      return;
+    }
+
+    const nextCell = this.cell + dx;
+    const nextLane = this.lane + dlane;
+
+    // bounds check
+    if (nextCell < 0 || nextCell >= TOTAL_CELLS) return;
+    if (nextLane < 0 || nextLane >= LANES) return;
+
+    // obstacle check
+    const obs = OBS_MAP.get(`${nextCell},${nextLane}`);
+    if (obs) {
+      if (obs.effect === 'block') {
+        // can't enter — shake and flash message
+        this.cameras.main.shake(100, 0.008);
+        this.statusText.setText(obs.msg);
+        this.time.delayedCall(800, () => this.statusText.setText(''));
+        return;
+      }
+    }
+
+    this.busy = true;
+    if (dx !== 0) this.crab.play('walk');
+
+    this.tweens.add({
+      targets:  this.crab,
+      x:        nextCell * CELL + 16,
+      y:        this.trackTop + nextLane * CELL + 16,
+      duration: 160,
+      ease:     'Linear',
+      onComplete: () => {
+        this.cell = nextCell;
+        this.lane = nextLane;
+        this.busy = false;
+
+        if (obs) {
+          if (obs.effect === 'stun') {
+            this.stunTurns = obs.turns;
+            this.statusText.setText(obs.msg);
+            this.cameras.main.flash(200, 255, 80, 0);
+          } else if (obs.effect === 'push') {
+            // bounce back 1 cell on next move (immediate push)
+            this.statusText.setText(obs.msg);
+            this.cameras.main.shake(150, 0.01);
+            this.time.delayedCall(200, () => {
+              const pushCell = Math.max(0, this.cell - 1);
+              this.tweens.add({
+                targets: this.crab, x: pushCell * CELL + 16, duration: 120,
+                ease: 'Linear', onComplete: () => { this.cell = pushCell; this.refreshHUD(); }
+              });
+            });
+            this.time.delayedCall(900, () => this.statusText.setText(''));
+          }
+        }
+
+        this.refreshHUD();
+
+        if (this.cell >= FINISH_CELL) {
+          this.onWin();
+        } else {
+          this.crab.stop();
+          this.crab.setFrame(0);
+        }
+      },
+    });
+  }
+
+  refreshHUD() {
+    const zone = TRACK[Math.min(this.cell, TOTAL_CELLS - 1)];
+    const pct  = Math.min(100, Math.round(this.cell / FINISH_CELL * 100));
+    const fill = Math.round(pct / 10);
+    const bar  = '█'.repeat(fill) + '░'.repeat(10 - fill);
+    this.hudText.setText(`${zone.toUpperCase()}  ${bar}  ${pct}%`);
+  }
+
+  onWin() {
+    this.won = true;
+    this.crab.stop();
+    this.crab.setFrame(0);
+    if (this.timerEvent) this.timerEvent.remove();
+
+    const cs  = this.raceTime % 100;
+    const sec = Math.floor(this.raceTime / 100);
+    const m   = Math.floor(sec / 60);
+    const s   = sec % 60;
+    const timeStr = `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
+
+    const { width: W, height: H } = this.scale;
+    this.add.rectangle(W/2, H/2, 240, 84, 0x0a1828, 230).setScrollFactor(0);
+    this.add.text(W/2, H/2 - 20, '🦀  FINISH!  🦀', {
+      fontFamily: 'monospace', fontSize: '18px',
+      color: '#e8e030', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5).setScrollFactor(0);
+    this.add.text(W/2, H/2 + 4, `Time: ${timeStr}`, {
+      fontFamily: 'monospace', fontSize: '11px',
+      color: '#ffffff', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(0.5).setScrollFactor(0);
+    this.add.text(W/2, H/2 + 22, 'tap or space to race again', {
+      fontFamily: 'monospace', fontSize: '9px', color: '#7ec8e3',
+    }).setOrigin(0.5).setScrollFactor(0);
+
+    // small delay so the winning tap doesn't immediately restart
+    this.time.delayedCall(400, () => {
+      this.input.once('pointerdown', () => this.scene.restart());
+      this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+    });
+  }
+}
+
+new Phaser.Game({
+  type:            Phaser.AUTO,
+  width:           480,
+  height:          270,
+  backgroundColor: '#1a2030',
+  pixelArt:        true,
+  scale: {
+    mode:       Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  scene: RaceScene,
+});
+</script>
+</body>
+</html>

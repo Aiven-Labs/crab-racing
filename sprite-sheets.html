@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crab Racing — Sprite Sheets</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0f1e;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8eaf0;
+    padding: 40px 24px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 1.4rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7ec8e3;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 0.75rem;
+    color: #445;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 48px;
+  }
+  .frame-labels {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 16px;
+  }
+  .frame-label {
+    width: 128px;
+    text-align: center;
+    font-size: 0.55rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #334;
+  }
+  .crab-section {
+    margin-bottom: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .crab-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+    width: 100%;
+    max-width: 1060px;
+  }
+  .crab-title {
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .crab-identity {
+    font-size: 0.65rem;
+    color: #445;
+    letter-spacing: 0.05em;
+  }
+  .sheet-row {
+    display: flex;
+    background: #111827;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #1e2a3a;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 1100px;
+  }
+  .frame-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .frame-canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    width: 96px;
+    height: 96px;
+    border-radius: 6px;
+    background: #0d1525;
+    border: 1px solid #1e2a3a;
+  }
+  .frame-name {
+    font-size: 0.52rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #334;
+  }
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: #1e2a3a;
+    color: #7ec8e3;
+    border: 1px solid #2e4a6a;
+    border-radius: 6px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  button:hover { background: #263a50; }
+  .anim-canvas {
+    image-rendering: pixelated;
+    width: 128px;
+    height: 128px;
+    border-radius: 8px;
+    border: 1px solid #2e4a6a;
+    background: #0d1525;
+  }
+  .anim-label {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    color: #445;
+    letter-spacing: 0.07em;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Character Sprite Sheets</h1>
+<p class="subtitle">Crab Racing v6.0 · 32 × 32 px · 8 frames · Top-down</p>
+
+<div id="root"></div>
+
+<script>
+// ─── Constants ───────────────────────────────────────────────────────────────
+const S = 32;   // sprite size
+const FRAMES = ['Idle A','Idle B','Walk 1','Walk 2','Walk 3','Walk 4','Throw','Stun A','Stun B','Stun C'];
+
+// ─── Drawing utilities ────────────────────────────────────────────────────────
+function px(ctx, x, y, color) {
+  if (x < 0 || y < 0 || x >= S || y >= S) return;
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+}
+
+function hline(ctx, x1, x2, y, color) {
+  for (let x = x1; x <= x2; x++) px(ctx, x, y, color);
+}
+
+function vline(ctx, x, y1, y2, color) {
+  for (let y = y1; y <= y2; y++) px(ctx, x, y, color);
+}
+
+function rect(ctx, x, y, w, h, color) {
+  for (let dy = 0; dy < h; dy++)
+    for (let dx = 0; dx < w; dx++)
+      px(ctx, x + dx, y + dy, color);
+}
+
+function circle(ctx, cx, cy, r, color, filled = true) {
+  for (let y = -r; y <= r; y++)
+    for (let x = -r; x <= r; x++)
+      if (filled ? (x*x + y*y <= r*r) : (Math.abs(Math.sqrt(x*x+y*y) - r) < 0.6))
+        px(ctx, Math.round(cx+x), Math.round(cy+y), color);
+}
+
+function stars(ctx, cx, cy, t) {
+  // dazed stars rotating around head
+  const angles = [0, 2.1, 4.2].map(a => a + t * 0.8);
+  angles.forEach(a => {
+    const sx = Math.round(cx + Math.cos(a) * 5);
+    const sy = Math.round(cy + Math.sin(a) * 4);
+    px(ctx, sx,   sy,   '#ffe566');
+    px(ctx, sx+1, sy,   '#ffe566');
+    px(ctx, sx,   sy-1, '#ffe566');
+  });
+}
+
+// Draw a spider web: 8 radial strands + 2 concentric rings, slightly oval (flattened vertically)
+function drawWeb(ctx, cx, cy, silk, accent) {
+  const RADIALS = 8;
+  const RINGS   = [2.5, 4.5]; // radii for inner and outer ring
+  const VX = 1.0, VY = 0.6;   // x/y scale — makes web oval (wider than tall)
+
+  // line between two integer points
+  function line2(x1, y1, x2, y2, c) {
+    const steps = Math.max(Math.abs(x2-x1), Math.abs(y2-y1), 1);
+    for (let s = 0; s <= steps; s++)
+      px(ctx, Math.round(x1+(x2-x1)*s/steps), Math.round(y1+(y2-y1)*s/steps), c);
+  }
+
+  // radial strands from center outward
+  for (let r = 0; r < RADIALS; r++) {
+    const a = (r / RADIALS) * Math.PI * 2 - Math.PI / 2;
+    const ox = Math.round(cx + Math.cos(a) * RINGS[1] * VX);
+    const oy = Math.round(cy + Math.sin(a) * RINGS[1] * VY);
+    line2(cx, cy, ox, oy, silk);
+  }
+
+  // center dot in accent
+  px(ctx, cx, cy, accent);
+
+  // concentric rings connecting adjacent radial tips
+  RINGS.forEach(rad => {
+    for (let r = 0; r < RADIALS; r++) {
+      const a1 = (r / RADIALS)       * Math.PI * 2 - Math.PI / 2;
+      const a2 = ((r+1) / RADIALS)   * Math.PI * 2 - Math.PI / 2;
+      line2(
+        Math.round(cx + Math.cos(a1) * rad * VX),
+        Math.round(cy + Math.sin(a1) * rad * VY),
+        Math.round(cx + Math.cos(a2) * rad * VX),
+        Math.round(cy + Math.sin(a2) * rad * VY),
+        silk
+      );
+    }
+  });
+}
+
+// ─── Crab definitions ─────────────────────────────────────────────────────────
+// Frame index meanings:
+//  0: Idle A   1: Idle B   2-5: Walk 1-4   6: Throw   7: Stunned
+
+// HORSESHOE CRAB
+// Top-down, facing up (north = racing direction).
+// Anatomy: wide smooth PROSOMA dome → narrower OPISTHOSOMA with side spines → long TELSON tail spike.
+function drawHorseshoe(ctx, fi) {
+  const stunned = fi >= 7;
+  const stunFrame = fi - 7; // 0,1,2 for stun A/B/C
+  const throwing = fi === 6;
+
+  // ── palette ──
+  const C1 = '#5a2e0a'; // dark brown shell
+  const C2 = '#8c4c18'; // mid brown
+  const C3 = '#c8883c'; // warm ridge highlight
+  const C4 = '#3a1a04'; // very dark outline / spines
+  const CL = '#4a2008'; // leg tips
+  const CT = '#2e1204'; // telson
+
+  const stunWobble = stunned ? [0, 1, -1][stunFrame] || 0 : 0;
+  const bounceY = (fi === 1 && !stunned) ? -1 : 0;
+  const oy = stunned ? 2 + stunWobble : bounceY;
+  // tail flick: alternates ±2px left/right on walk frames
+  const tailFlick = [0, 0, 2, -2, 2, -2, 0, 0][fi] || 0;
+
+  // ── PROSOMA — wide kidney/dome, widest around y=8–11 ──
+  // Each row: [x1, x2, y] relative to sprite
+  const prosoma = [
+    [13,18, 2],[11,20, 3],[9,22,  4],[8,23,  5],
+    [7, 24, 6],[6, 25, 7],[6, 25, 8],[6, 25, 9],
+    [6, 25,10],[7, 24,11],[8, 23,12],[9, 22,13],
+    [10,21,14],[11,20,15],
+  ];
+  prosoma.forEach(([x1,x2,y]) => hline(ctx, x1, x2, y + oy, C1));
+
+  // Central ridge (slightly raised, lighter strip down the middle)
+  for (let y = 3; y <= 14; y++) hline(ctx, 14, 17, y + oy, C2);
+  for (let y = 4; y <= 12; y++) hline(ctx, 15, 16, y + oy, C3);
+
+  // Subtle highlight lobe top-left of dome
+  hline(ctx, 9,  12, 5 + oy, C2);
+  hline(ctx, 8,  11, 6 + oy, C2);
+  hline(ctx, 8,  10, 7 + oy, C2);
+
+  // ── Compound eyes — two pairs on prosoma sides ──
+  // Lateral eyes (larger, on widest part)
+  px(ctx, 5,  9 + oy, '#ffe566');
+  px(ctx, 5,  10+ oy, '#ffe566');
+  px(ctx, 26, 9 + oy, '#ffe566');
+  px(ctx, 26, 10+ oy, '#ffe566');
+
+  // ── OPISTHOSOMA — narrower hexagonal section with pointed edge spines ──
+  const opist = [
+    [10,21,15],[10,21,16],[10,21,17],
+    [11,20,18],[11,20,19],[12,19,20],
+    [12,19,21],[13,18,22],
+  ];
+  opist.forEach(([x1,x2,y]) => hline(ctx, x1, x2, y + oy, C1));
+
+  // Opisthosoma central ridge continues
+  for (let y = 15; y <= 22; y++) hline(ctx, 14, 17, y + oy, C2);
+  for (let y = 15; y <= 21; y++) hline(ctx, 15, 16, y + oy, C3);
+
+  // Opisthosoma lateral SPINES (the distinctive pointed edges)
+  // Three spines per side
+  px(ctx, 8,  16 + oy, C4); px(ctx, 7,  17 + oy, C4); px(ctx, 6,  18 + oy, C4); // left spines
+  px(ctx, 23, 16 + oy, C4); px(ctx, 24, 17 + oy, C4); px(ctx, 25, 18 + oy, C4); // right spines
+  px(ctx, 9,  19 + oy, C4); px(ctx, 8,  20 + oy, C4);                            // second left
+  px(ctx, 22, 19 + oy, C4); px(ctx, 23, 20 + oy, C4);                            // second right
+  px(ctx, 11, 22 + oy, C4); px(ctx, 10, 23 + oy, C4);                            // third left
+  px(ctx, 20, 22 + oy, C4); px(ctx, 21, 23 + oy, C4);                            // third right
+
+  // ── TELSON — long stiff tail spike, flicks left/right during walk ──
+  if (!stunned) {
+    const tx = tailFlick;
+    vline(ctx, 15 + tx, 22 + oy, 24, CT);
+    vline(ctx, 16 + tx, 22 + oy, 25, CT);
+    vline(ctx, 15 + tx, 24, 28, CT);
+    vline(ctx, 16 + tx, 25, 30, CT);
+    px(ctx, 15 + tx, 29, CT);
+    px(ctx, 16 + tx, 31, CT);
+  }
+
+  // ── Legs — peek out from prosoma edges (5 pairs, tiny) ──
+  if (!stunned) {
+    const walkPhases = [
+      [ 0, 0, 0, 0, 0],
+      [ 1,-1, 1,-1, 1],
+      [ 2,-1, 2,-1, 2],
+      [-1, 2,-1, 2,-1],
+      [ 2,-2, 2,-2, 2],
+      [-2, 2,-2, 2,-2],
+      [ 0, 0, 0, 0, 0],
+    ];
+    const phase = walkPhases[Math.min(fi, 6)];
+    [6,8,10,12,14].forEach((ly, i) => {
+      const w = phase[i] || 0;
+      px(ctx, 5,  ly + oy, CL);
+      px(ctx, 3,  ly + w + oy, CL);
+      px(ctx, 26, ly + oy, CL);
+      px(ctx, 28, ly + w + oy, CL);
+    });
+  }
+
+  // ── Throw — horseshoe projectile arc ──
+  if (throwing) {
+    // small horseshoe shape ahead of crab
+    hline(ctx, 13, 18, 0, C2);
+    px(ctx, 13, 1, C2); px(ctx, 18, 1, C2);
+    px(ctx, 13, 2, C2); px(ctx, 18, 2, C2);
+  }
+
+  // ── Stunned ──
+  if (stunned) {
+    stars(ctx, 16, 0, stunFrame * 1.1);
+    px(ctx, 13, 8 + oy, '#ff4444'); px(ctx, 15, 8 + oy, '#ff4444'); px(ctx, 14, 9 + oy, '#ff4444');
+    px(ctx, 17, 8 + oy, '#ff4444'); px(ctx, 19, 8 + oy, '#ff4444'); px(ctx, 18, 9 + oy, '#ff4444');
+  }
+}
+
+// GHOST CRAB
+// Small, light, fast. Tiny round body, very long legs, big eyes.
+function drawGhost(ctx, fi) {
+  const stunned = fi >= 7;
+  const stunFrame = fi - 7;
+  const throwing = fi === 6;
+
+  const C1 = '#c8f0c8'; // pale body
+  const C2 = '#e8ffe8'; // highlight
+  const C3 = '#90c890'; // shadow/leg
+  const CEye = '#1a2a1a';
+
+  const stunWobble = stunned ? [0, 1, -1][stunFrame] || 0 : 0;
+  const bounceY = (fi === 1 && !stunned) ? -1 : 0;
+  const bodyY = stunned ? 20 + stunWobble : 18 + bounceY;
+
+  // body
+  circle(ctx, 16, bodyY, 6, C1);
+  circle(ctx, 14, bodyY - 1, 2, C2); // highlight
+
+  // eyes
+  if (!stunned) {
+    rect(ctx, 13, bodyY - 3, 2, 2, CEye);
+    rect(ctx, 17, bodyY - 3, 2, 2, CEye);
+    px(ctx, 13, bodyY - 3, '#ffffff');
+    px(ctx, 17, bodyY - 3, '#ffffff');
+  }
+
+  // legs — very long, sideways
+  const walkPhase = [0,0,1,0,1,0,0,0][fi] || 0;
+  const wiggle = walkPhase * 2;
+  if (!stunned) {
+    const legColors = C3;
+    // 4 legs per side
+    [[bodyY-2,bodyY-1,bodyY,bodyY+1],[bodyY-2,bodyY-1,bodyY,bodyY+1]].forEach((_, side) => {
+      const dir = side === 0 ? -1 : 1;
+      const bx = side === 0 ? 10 : 22;
+      const ex = side === 0 ? 1 : 30;
+      [bodyY-2, bodyY, bodyY+2, bodyY+3].forEach((ly, i) => {
+        const wig = i % 2 === 0 ? wiggle : -wiggle;
+        px(ctx, bx, ly, legColors);
+        px(ctx, bx + dir*2, ly + wig, legColors);
+        px(ctx, bx + dir*4, ly + wig, legColors);
+        px(ctx, ex, ly + wig + 1, legColors);
+      });
+    });
+  }
+
+  // claws
+  if (!stunned) {
+    const clawRaise = throwing ? -3 : walkPhase * -1;
+    // left claw
+    rect(ctx, 6, bodyY - 1 + clawRaise, 4, 3, C3);
+    rect(ctx, 3, bodyY - 3 + clawRaise, 3, 2, C1);
+    // right claw
+    rect(ctx, 22, bodyY - 1 + clawRaise, 4, 3, C3);
+    rect(ctx, 26, bodyY - 3 + clawRaise, 3, 2, C1);
+  }
+
+  if (throwing) {
+    // ghost push — glow outline
+    for (let r = 7; r <= 9; r++) circle(ctx, 16, bodyY, r, 'rgba(180,255,180,0.3)', false);
+  }
+
+  if (stunned) {
+    stars(ctx, 16, 13, stunFrame * 1.1);
+    px(ctx, 13, bodyY - 2, '#ff4444'); px(ctx, 15, bodyY - 2, '#ff4444');
+    px(ctx, 14, bodyY - 1, '#ff4444');
+    px(ctx, 17, bodyY - 2, '#ff4444'); px(ctx, 19, bodyY - 2, '#ff4444');
+    px(ctx, 18, bodyY - 1, '#ff4444');
+  }
+}
+
+// STONE CRAB
+// Compact hexagonal body. HUGE claws. Thick legs. Armored look.
+function drawStone(ctx, fi) {
+  const stunned = fi >= 7;
+  const stunFrame = fi - 7;
+  const throwing = fi === 6;
+
+  const C1 = '#4a3828'; // dark brown
+  const C2 = '#7a6050'; // mid
+  const C3 = '#a08878'; // highlight
+  const CL = '#3a2a1a'; // leg
+
+  const stunWobble = stunned ? [0, 1, -1][stunFrame] || 0 : 0;
+  const bounceY = (fi === 1 && !stunned) ? -1 : 0;
+  const bodyY = stunned ? 2 + stunWobble : bounceY;
+
+  // hexagonal body, compact
+  // rows:
+  [
+    [10,21,13],[10,21,14],[9,22,15],[8,23,16],
+    [8,23,17],[8,23,18],[8,23,19],[9,22,20],
+    [10,21,21],[10,21,22]
+  ].forEach(([x1, x2, y]) => hline(ctx, x1, x2, y + bodyY, C1));
+
+  // mid highlight strip
+  [15,16,17,18].forEach(y => hline(ctx, 12, 19, y + bodyY, C2));
+  hline(ctx, 13, 18, 16 + bodyY, C3);
+
+  // rock texture dots
+  [[11,20],[14,17],[18,16],[10,22],[20,21]].forEach(([x,y]) => px(ctx, x, y + bodyY, CL));
+
+  // eyes
+  px(ctx, 12, 13 + bodyY, '#ffcc44');
+  px(ctx, 19, 13 + bodyY, '#ffcc44');
+
+  // legs — thick, 3 per side
+  if (!stunned) {
+    const wa = [0,1,0,-1][fi % 4] || 0;
+    [[14,17,20],[14,17,20]].forEach((_, side) => {
+      const dir = side === 0 ? -1 : 1;
+      const bx = side === 0 ? 9 : 22;
+      [14, 17, 20].forEach((ly, i) => {
+        const w = i % 2 === 0 ? wa : -wa;
+        px(ctx, bx,         ly + bodyY, CL);
+        px(ctx, bx+dir,     ly + bodyY, CL);
+        px(ctx, bx+dir*2,   ly+w + bodyY, CL);
+        px(ctx, bx+dir*3,   ly+w + bodyY, CL);
+        px(ctx, bx+dir*4,   ly+w+1 + bodyY, CL);
+      });
+    });
+  }
+
+  // BIG claws
+  if (!stunned) {
+    const clawY = throwing ? 8 : 11;
+    // left claw
+    rect(ctx, 2, clawY + bodyY, 7, 5, C2);
+    rect(ctx, 2, clawY + bodyY, 7, 2, C3);
+    rect(ctx, 2, clawY+2 + bodyY, 3, 3, C1); // lower jaw
+    px(ctx, 3, clawY+5 + bodyY, CL);
+    // right claw
+    rect(ctx, 23, clawY + bodyY, 7, 5, C2);
+    rect(ctx, 23, clawY + bodyY, 7, 2, C3);
+    rect(ctx, 27, clawY+2 + bodyY, 3, 3, C1);
+    px(ctx, 28, clawY+5 + bodyY, CL);
+
+    if (throwing) {
+      // rock projectile hint
+      circle(ctx, 16, 4, 3, C2);
+      px(ctx, 16, 4, C3);
+    }
+  }
+
+  if (stunned) {
+    stars(ctx, 16, 5, stunFrame * 1.1);
+    px(ctx, 12, 14 + bodyY, '#ff4444'); px(ctx, 14, 14 + bodyY, '#ff4444');
+    px(ctx, 13, 15 + bodyY, '#ff4444');
+    px(ctx, 17, 14 + bodyY, '#ff4444'); px(ctx, 19, 14 + bodyY, '#ff4444');
+    px(ctx, 18, 15 + bodyY, '#ff4444');
+  }
+}
+
+// COCONUT CRAB
+// Large, round. Reddish-brown. Distinctive striped thick legs.
+function drawCoconut(ctx, fi) {
+  const stunned = fi >= 7;
+  const stunFrame = fi - 7;
+  const throwing = fi === 6;
+
+  const C1 = '#7a3e1e'; // dark body
+  const C2 = '#b0622e'; // mid
+  const C3 = '#d4945a'; // highlight
+  const C4 = '#e8b87a'; // light highlight
+  const CL = '#6b3010'; // leg dark
+  const CL2 = '#c07840'; // leg stripe
+
+  const stunWobble = stunned ? [0, 1, -1][stunFrame] || 0 : 0;
+  const bounceY = (fi === 1 && !stunned) ? -1 : 0;
+  const bodyY = stunned ? 2 + stunWobble : bounceY;
+
+  // large round body — 18px diameter
+  for (let y = -9; y <= 9; y++) {
+    const hw = Math.round(9 * Math.sqrt(1 - Math.pow(y/9, 2)));
+    hline(ctx, 16-hw, 16+hw-1, 17+y + bodyY, C1);
+  }
+  // belly highlight
+  for (let y = -5; y <= 5; y++) {
+    const hw = Math.round(5 * Math.sqrt(1 - Math.pow(y/5, 2)));
+    hline(ctx, 16-hw, 16+hw-1, 17+y + bodyY, C2);
+  }
+  // top shell plate
+  for (let y = -3; y <= 3; y++) {
+    const hw = Math.round(4 * Math.sqrt(1 - Math.pow(y/3, 2)));
+    hline(ctx, 16-hw, 16+hw-1, 14+y + bodyY, C3);
+  }
+  px(ctx, 14, 13 + bodyY, C4);
+  px(ctx, 15, 13 + bodyY, C4);
+
+  // eyes — stalked
+  px(ctx, 12, 11 + bodyY, '#ff8800');
+  px(ctx, 19, 11 + bodyY, '#ff8800');
+  px(ctx, 12, 12 + bodyY, '#ffaa00');
+  px(ctx, 19, 12 + bodyY, '#ffaa00');
+
+  // legs — thick striped, 4 per side
+  if (!stunned) {
+    const wa = [0,0,3,-3,3,-3,0,0][fi] || 0;
+    [0,1].forEach(side => {
+      const dir = side === 0 ? -1 : 1;
+      const bx = side === 0 ? 7 : 24;
+      [12,15,18,21].forEach((ly, i) => {
+        const w = (i % 2 === 0 ? wa : -wa);
+        const lbx = bx + dir * 1;
+        // thick leg segments
+        px(ctx, lbx,       ly + bodyY, CL);
+        px(ctx, lbx+dir,   ly + bodyY, CL2);
+        px(ctx, lbx+dir*2, ly+w + bodyY, CL);
+        px(ctx, lbx+dir*3, ly+w + bodyY, CL2);
+        px(ctx, lbx+dir*4, ly+w+1 + bodyY, CL);
+        px(ctx, lbx+dir*5, ly+w+1 + bodyY, CL2);
+      });
+    });
+  }
+
+  // claws — medium sized
+  if (!stunned) {
+    const cy2 = throwing ? 7 : 10;
+    rect(ctx, 3, cy2 + bodyY, 5, 4, C2);
+    rect(ctx, 3, cy2 + bodyY, 5, 2, C3);
+    rect(ctx, 24, cy2 + bodyY, 5, 4, C2);
+    rect(ctx, 24, cy2 + bodyY, 5, 2, C3);
+
+    if (throwing) {
+      // coconut hint
+      circle(ctx, 16, 4, 4, C1);
+      circle(ctx, 16, 4, 2, C2);
+      px(ctx, 15, 3, C3);
+    }
+  }
+
+  if (stunned) {
+    stars(ctx, 16, 5, stunFrame * 1.1);
+    px(ctx, 12, 15 + bodyY, '#ff4444'); px(ctx, 14, 15 + bodyY, '#ff4444');
+    px(ctx, 13, 16 + bodyY, '#ff4444');
+    px(ctx, 17, 15 + bodyY, '#ff4444'); px(ctx, 19, 15 + bodyY, '#ff4444');
+    px(ctx, 18, 16 + bodyY, '#ff4444');
+  }
+}
+
+// SPIDER CRAB — Japanese spider crab (Macrocheira kaempferi)
+// Pear-shaped carapace with tubercles, orange body, white spots on legs,
+// very long segmented legs (3 per side), long chelipeds forward.
+function drawSpider(ctx, fi) {
+  const stunned = fi >= 7;
+  const stunFrame = fi - 7;
+  const throwing = fi === 6;
+
+  // ── palette — orange with white spots, as per the real animal ──
+  const C1 = '#7a2e00'; // dark carapace shadow
+  const C2 = '#c85010'; // main orange-brown
+  const C3 = '#f07828'; // bright orange highlight
+  const CL = '#b04010'; // leg base orange
+  const CS = '#fff5c8'; // white spot colour on legs
+  const CE = '#ff6600'; // eye orange
+
+  const stunWobble = stunned ? [0, 1, -1][stunFrame] || 0 : 0;
+  const bounceY = (fi === 1 && !stunned) ? -1 : 0;
+  const bodyY = stunned ? 2 + stunWobble : bounceY;
+
+  // ── Pear-shaped carapace — narrow front, wide rear ──
+  // Rows: [x1, x2, y]
+  [
+    [14,17,11],[13,18,12],[12,19,13],[11,20,14],
+    [11,20,15],[10,21,16],[10,21,17],[10,21,18],
+    [11,20,19],[12,19,20],[13,18,21],
+  ].forEach(([x1,x2,y]) => hline(ctx, x1, x2, y + bodyY, C2));
+
+  // Carapace highlight — brighter orange down the centre
+  for (let y = 13; y <= 19; y++) hline(ctx, 14, 17, y + bodyY, C3);
+  hline(ctx, 15, 16, 14 + bodyY, C3);
+
+  // Tubercles — small dark bumps on carapace surface
+  [[12,16],[19,15],[11,19],[20,18],[14,21],[17,13]].forEach(([x,y]) =>
+    px(ctx, x, y + bodyY, C1)
+  );
+
+  // ── Eyestalks — wide apart near front of carapace ──
+  // Stalk
+  px(ctx, 11, 12 + bodyY, C2); px(ctx, 21, 12 + bodyY, C2);
+  // Eye (orange-red)
+  px(ctx, 10, 11 + bodyY, CE); px(ctx, 22, 11 + bodyY, CE);
+  px(ctx, 10, 12 + bodyY, CE); px(ctx, 22, 12 + bodyY, CE);
+
+  // ── 3 walking legs per side — orange with white spots, knee-jointed ──
+  if (!stunned) {
+    // Alternating tripod gait
+    const swingA = [0, 0,  3, -3,  3, -3, 0][Math.min(fi,6)] || 0;
+    const swingB = [0, 0, -3,  3, -3,  3, 0][Math.min(fi,6)] || 0;
+    const swings = [swingA, swingB, swingA];
+
+    [0, 1].forEach(side => {
+      const dir = side === 0 ? -1 : 1;
+      const bx  = side === 0 ? 10  : 21;
+
+      [14, 17, 20].forEach((rootY, i) => {
+        const sw = swings[i];
+        const ry = rootY + bodyY;
+
+        // Femur: 5px, 2px thick, orange
+        for (let seg = 0; seg <= 5; seg++) {
+          const t   = seg / 5;
+          const lx  = bx + dir * seg;
+          const ly2 = Math.round(ry + sw * t * 0.4);
+          px(ctx, lx, ly2,     CL);
+          px(ctx, lx, ly2 + 1, CL);
+        }
+
+        // White spot on femur mid-point
+        const fsx = bx + dir * 3;
+        const fsy = Math.round(ry + sw * 0.24);
+        px(ctx, fsx, fsy, CS);
+
+        // Knee — bright orange joint
+        const kneeX = bx + dir * 5;
+        const kneeY = Math.round(ry + sw * 0.4);
+        px(ctx, kneeX, kneeY,     C3);
+        px(ctx, kneeX, kneeY + 1, C3);
+
+        // Tibia: 5px, tapers from 2px to 1px, orange
+        for (let seg = 1; seg <= 5; seg++) {
+          const t   = seg / 5;
+          const lx  = kneeX + dir * seg;
+          const ly2 = Math.round(kneeY + sw * 0.6 * t);
+          px(ctx, lx, ly2, CL);
+          if (seg <= 2) px(ctx, lx, ly2 + 1, CL);
+        }
+
+        // White spot on tibia
+        const tsx = kneeX + dir * 3;
+        const tsy = Math.round(kneeY + sw * 0.36);
+        px(ctx, tsx, tsy, CS);
+      });
+    });
+  }
+
+  // ── Long chelipeds — extend forward, orange with white joint spots ──
+  if (!stunned) {
+    const chY = throwing ? 6 : 9;
+    // Left cheliped: angled out-forward
+    px(ctx, 12, chY + 1 + bodyY, CL); px(ctx, 11, chY + 1 + bodyY, CL);
+    px(ctx, 10, chY + bodyY,     CL); px(ctx,  9, chY + bodyY,     CL);
+    px(ctx,  8, chY - 1 + bodyY, CL); px(ctx,  7, chY - 1 + bodyY, CL);
+    px(ctx,  8, chY + bodyY,     C3); // joint
+    px(ctx,  6, chY - 2 + bodyY, CL); px(ctx,  5, chY - 2 + bodyY, C2); // claw tip
+    px(ctx,  5, chY - 1 + bodyY, C2);
+    px(ctx,  9, chY - 1 + bodyY, CS); // white spot
+
+    // Right cheliped
+    px(ctx, 19, chY + 1 + bodyY, CL); px(ctx, 20, chY + 1 + bodyY, CL);
+    px(ctx, 21, chY + bodyY,     CL); px(ctx, 22, chY + bodyY,     CL);
+    px(ctx, 23, chY - 1 + bodyY, CL); px(ctx, 24, chY - 1 + bodyY, CL);
+    px(ctx, 23, chY + bodyY,     C3); // joint
+    px(ctx, 25, chY - 2 + bodyY, CL); px(ctx, 26, chY - 2 + bodyY, C2); // claw tip
+    px(ctx, 26, chY - 1 + bodyY, C2);
+    px(ctx, 22, chY - 1 + bodyY, CS); // white spot
+
+    if (throwing) {
+      // web projectile launched forward — drawn above the crab
+      drawWeb(ctx, 16, 3 + bodyY, CS, C3);
+    }
+  }
+
+  if (stunned) {
+    stars(ctx, 16, 5, stunFrame * 1.1);
+    px(ctx, 12, 15 + bodyY, '#ff4444'); px(ctx, 14, 15 + bodyY, '#ff4444');
+    px(ctx, 13, 16 + bodyY, '#ff4444');
+    px(ctx, 17, 15 + bodyY, '#ff4444'); px(ctx, 19, 15 + bodyY, '#ff4444');
+    px(ctx, 18, 16 + bodyY, '#ff4444');
+  }
+}
+
+// ─── Crab roster ─────────────────────────────────────────────────────────────
+const CRABS = [
+  { id: 'horseshoe', name: 'Horseshoe Crab', tagline: 'The Immovable Object', accent: '#c8883c', draw: drawHorseshoe },
+  { id: 'ghost',     name: 'Ghost Crab',     tagline: 'Melee Speedster',       accent: '#c2f0c2', draw: drawGhost     },
+  { id: 'stone',     name: 'Stone Crab',     tagline: 'Armored Bombardier',    accent: '#b0a090', draw: drawStone     },
+  { id: 'coconut',   name: 'Coconut Crab',   tagline: 'Big Long-Range Bruiser',accent: '#e0a84b', draw: drawCoconut   },
+  { id: 'spider',    name: 'Spider Crab',    tagline: 'Lanky Generalist',      accent: '#f07828', draw: drawSpider    },
+];
+
+// ─── Render a single sprite to a canvas ───────────────────────────────────────
+function renderSprite(crab, frameIndex) {
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  crab.draw(ctx, frameIndex);
+  return c;
+}
+
+// ─── Build sprite sheet (all frames in one canvas) ────────────────────────────
+function buildSheet(crab) {
+  const c = document.createElement('canvas');
+  c.width = S * FRAMES.length; c.height = S;
+  const ctx = c.getContext('2d');
+  FRAMES.forEach((_, fi) => {
+    const fc = renderSprite(crab, fi);
+    ctx.drawImage(fc, fi * S, 0);
+  });
+  return c;
+}
+
+// ─── Download helpers ─────────────────────────────────────────────────────────
+function download(canvas, filename) {
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = filename;
+  a.click();
+}
+
+// ─── UI build ────────────────────────────────────────────────────────────────
+const root = document.getElementById('root');
+
+// Animation state
+const animState = {};
+
+CRABS.forEach(crab => {
+  animState[crab.id] = { frame: 0, seq: [0,1,2,3,4,5], interval: null };
+
+  const section = document.createElement('div');
+  section.className = 'crab-section';
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'crab-header';
+  header.innerHTML = `
+    <span class="crab-title" style="color:${crab.accent}">${crab.name}</span>
+    <span class="crab-identity">${crab.tagline}</span>
+  `;
+
+  // Sheet row
+  const row = document.createElement('div');
+  row.className = 'sheet-row';
+
+  // Individual frames
+  const frameCanvases = [];
+  FRAMES.forEach((fname, fi) => {
+    const block = document.createElement('div');
+    block.className = 'frame-block';
+
+    const fc = renderSprite(crab, fi);
+    const display = document.createElement('canvas');
+    display.className = 'frame-canvas';
+    display.width = S; display.height = S;
+    display.style.width = '96px'; display.style.height = '96px';
+    display.getContext('2d').drawImage(fc, 0, 0);
+    frameCanvases.push(display);
+
+    const label = document.createElement('div');
+    label.className = 'frame-name';
+    label.textContent = fname;
+
+    block.appendChild(display);
+    block.appendChild(label);
+    row.appendChild(block);
+  });
+
+  // Animation preview
+  const animBlock = document.createElement('div');
+  animBlock.className = 'frame-block';
+  animBlock.style.marginLeft = '16px';
+  animBlock.style.borderLeft = `1px solid #1e2a3a`;
+  animBlock.style.paddingLeft = '16px';
+
+  const animC = document.createElement('canvas');
+  animC.className = 'anim-canvas';
+  animC.width = S; animC.height = S;
+  animC.style.width = '128px'; animC.style.height = '128px';
+
+  const animLabel = document.createElement('div');
+  animLabel.className = 'anim-label';
+  animLabel.textContent = 'Walk preview';
+
+  animBlock.appendChild(animC);
+  animBlock.appendChild(animLabel);
+
+  // Anim controls
+  const ctrlRow = document.createElement('div');
+  ctrlRow.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:8px;';
+
+  const animSeqs = {
+    'Walk':    [2,3,4,5],
+    'Idle':    [0,1],
+    'Throw':   [6,6,0,0],
+    'Stunned': [7,8,9],
+  };
+
+  Object.entries(animSeqs).forEach(([label, seq]) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.cssText = `font-size:0.55rem;padding:4px 10px;`;
+    btn.onclick = () => {
+      animState[crab.id].seq = seq;
+      animLabel.textContent = `${label} preview`;
+    };
+    ctrlRow.appendChild(btn);
+  });
+
+  animBlock.appendChild(ctrlRow);
+  row.appendChild(animBlock);
+
+  // Start walk animation loop
+  let af = 0;
+  function tick() {
+    const state = animState[crab.id];
+    const fi = state.seq[af % state.seq.length];
+    const ctx2 = animC.getContext('2d');
+    ctx2.clearRect(0, 0, S, S);
+    crab.draw(ctx2, fi);
+    af++;
+    setTimeout(tick, 150);
+  }
+  tick();
+
+  // Buttons
+  const sheet = buildSheet(crab);
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btn-row';
+  btnRow.innerHTML = ``;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.textContent = `↓ ${crab.id}-sheet.png`;
+  dlBtn.onclick = () => download(sheet, `crab-${crab.id}-sheet.png`);
+
+  btnRow.appendChild(dlBtn);
+
+  section.appendChild(header);
+  section.appendChild(row);
+  section.appendChild(btnRow);
+  root.appendChild(section);
+});
+
+// ─── Combined download ────────────────────────────────────────────────────────
+const dlAllRow = document.createElement('div');
+dlAllRow.style.cssText = 'text-align:center;margin:24px 0 8px;';
+const dlAll = document.createElement('button');
+dlAll.textContent = '↓ Download combined sprite sheet (all 5 crabs)';
+dlAll.style.cssText = 'font-size:0.7rem;padding:10px 24px;background:#1e3a50;border-color:#3a7aaa;color:#7ec8e3;';
+dlAll.onclick = () => {
+  const combined = document.createElement('canvas');
+  combined.width = S * FRAMES.length;
+  combined.height = S * CRABS.length;
+  const ctx = combined.getContext('2d');
+  CRABS.forEach((crab, ci) => {
+    const sheet = buildSheet(crab);
+    ctx.drawImage(sheet, 0, ci * S);
+  });
+  download(combined, 'crab-racing-sprites.png');
+};
+dlAllRow.appendChild(dlAll);
+
+const phNote = document.createElement('p');
+phNote.style.cssText = 'text-align:center;font-size:0.6rem;color:#334;margin-top:8px;letter-spacing:0.07em;';
+phNote.textContent = `Phaser.js: scene.load.spritesheet('horseshoe', 'crab-horseshoe-sheet.png', { frameWidth: 32, frameHeight: 32 })`;
+root.appendChild(dlAllRow);
+root.appendChild(phNote);
+</script>
+</body>
+</html>

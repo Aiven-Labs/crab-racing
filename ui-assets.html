@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crab Racing — UI Assets</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0f1e;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8eaf0;
+    min-height: 100vh;
+    padding: 40px 24px 60px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 1.5rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7ec8e3;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #556;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 48px;
+  }
+  .section { max-width: 960px; margin: 0 auto 56px; }
+  .section-title {
+    text-align: center;
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #3a5a7a;
+    margin-bottom: 24px;
+  }
+  .cards-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+  }
+  .card {
+    background: #111827;
+    border-radius: 14px;
+    padding: 20px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid #1e2a3a;
+    transition: transform 0.14s, border-color 0.14s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--accent, #3a5a7a); }
+  .canvas-wrap { image-rendering: pixelated; image-rendering: crisp-edges; border-radius: 6px; overflow: hidden; margin-bottom: 12px; }
+  .canvas-wrap canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+  .asset-name {
+    font-size: 0.68rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent, #7ec8e3);
+    margin-bottom: 3px;
+    text-align: center;
+  }
+  .asset-sub {
+    font-size: 0.57rem;
+    color: #3a5060;
+    letter-spacing: 0.05em;
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: #1a2840;
+    border: 1px solid #2a3a50;
+    border-radius: 6px;
+    color: #7ec8e3;
+    padding: 5px 10px;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.12s;
+  }
+  .btn:hover { background: #223050; }
+  .mockup-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    background: #111827;
+    border-radius: 14px;
+    padding: 28px 24px 20px;
+    border: 1px solid #1e2a3a;
+    text-align: center;
+  }
+  #mockup-canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border-radius: 6px;
+  }
+  .mockup-caption {
+    font-size: 0.58rem;
+    color: #3a5060;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    margin-top: 14px;
+  }
+</style>
+</head>
+<body>
+
+<h1>UI Assets</h1>
+<p class="subtitle">Crab Racing v6.0 · HUD, buttons, bars, effects · Phaser-ready</p>
+
+<div class="section">
+  <div class="section-title">Movement Pad · Shift L/R (left col) + Forward (right col)</div>
+  <div class="cards-row" id="buttons-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Crab Abilities · 64 × 64 · shown based on selected crab</div>
+  <div class="cards-row" id="abilities-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Status Bars · 128 × 14</div>
+  <div class="cards-row" id="bars-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Race Track HUD · 256 × 20</div>
+  <div class="cards-row" id="hud-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Zone Badges · 72 × 18</div>
+  <div class="cards-row" id="zones-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Combat Effects · 32 × 32</div>
+  <div class="cards-row" id="effects-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Status Icons · 16 × 16</div>
+  <div class="cards-row" id="icons-row"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">HUD Mockup — Armor Bar + Movement Controls Only</div>
+  <div class="mockup-wrap">
+    <canvas id="mockup-canvas"></canvas>
+    <div class="mockup-caption">Armor bar (top-left) · Movement pad (bottom-right)</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ══════════════════════════════════════════
+// UTILITIES
+// ══════════════════════════════════════════
+function px(ctx, x, y, c)          { ctx.fillStyle = c; ctx.fillRect(x,  y,  1,       1); }
+function hline(ctx, x1, x2, y, c) { ctx.fillStyle = c; ctx.fillRect(x1, y,  x2-x1+1, 1); }
+function vline(ctx, x, y1, y2, c) { ctx.fillStyle = c; ctx.fillRect(x,  y1, 1,       y2-y1+1); }
+function rect(ctx, x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x,  y,  w,       h); }
+function ellipse(ctx, cx, cy, rx, ry, c) {
+  for (let dy = -ry; dy <= ry; dy++)
+    for (let dx = -rx; dx <= rx; dx++)
+      if (dx*dx/(rx*rx) + dy*dy/(ry*ry) <= 1) px(ctx, cx+dx, cy+dy, c);
+}
+function circle(ctx, cx, cy, r, c) { ellipse(ctx, cx, cy, r, r, c); }
+function ring(ctx, cx, cy, r, c) {
+  for (let a = 0; a < 360; a += 2) {
+    const rad = a * Math.PI / 180;
+    px(ctx, Math.round(cx + r * Math.cos(rad)), Math.round(cy + r * Math.sin(rad)), c);
+  }
+}
+
+// ══════════════════════════════════════════
+// BUTTON BASE  — flat, paperboy-style
+// ══════════════════════════════════════════
+function buttonBase(ctx, bg) {
+  rect(ctx, 0,  0,  64, 64, '#000');
+  rect(ctx, 2,  2,  60, 60, bg);
+}
+
+// ══════════════════════════════════════════
+// ACTION BUTTONS  (64×64) — flat 2D
+// ══════════════════════════════════════════
+
+function drawSprintBtn(ctx) {
+  buttonBase(ctx, '#0c1a38');
+  const C = '#3a9af0';
+  // Right-pointing arrow: tip at x=54, widens left to x=34, shaft from x=10
+  for (let r = 0; r <= 20; r++) vline(ctx, 54 - r, 32 - r, 32 + r, C);
+  rect(ctx, 10, 24, 24, 16, C);
+}
+
+// ══════════════════════════════════════════
+// CRAB ABILITIES  (64×64) — flat 2D
+// ══════════════════════════════════════════
+
+function drawRockBtn(ctx) {
+  buttonBase(ctx, '#141410');
+  // Chunky rock: one big blob + smaller one for silhouette variety
+  ellipse(ctx, 34, 38, 18, 14, '#787870');
+  ellipse(ctx, 22, 30, 11,  9, '#909088');
+  // Single dark crack for character
+  for (let i = 0; i < 10; i++) px(ctx, 30+i, 32+i, '#202018');
+}
+
+function drawCoconutBtn(ctx) {
+  buttonBase(ctx, '#140a00');
+  // Coconut: flat circle + three dark eyes at top
+  circle(ctx, 32, 34, 20, '#9a6028');
+  circle(ctx, 32, 34, 16, '#c07830');
+  circle(ctx, 25, 24, 4, '#100800');
+  circle(ctx, 32, 21, 4, '#100800');
+  circle(ctx, 39, 24, 4, '#100800');
+}
+
+function drawWebBtn(ctx) {
+  buttonBase(ctx, '#0e0e08');
+  const C = '#c8c090';
+  const CX = 32, CY = 34;
+  // 8 radials
+  for (let a = 0; a < 8; a++) {
+    const angle = a * Math.PI / 4;
+    for (let r = 5; r <= 26; r++) {
+      const x = Math.round(CX + r * Math.cos(angle));
+      const y = Math.round(CY + r * Math.sin(angle));
+      if (x > 1 && x < 62 && y > 1 && y < 62) px(ctx, x, y, C);
+    }
+  }
+  // 3 concentric rings
+  [9, 15, 22].forEach(r => ring(ctx, CX, CY, r, C));
+  // Center knot
+  circle(ctx, CX, CY, 4, C);
+  px(ctx, CX, CY, '#fff8e0');
+}
+
+function drawHorseshoeBtn(ctx) {
+  buttonBase(ctx, '#0a0e0e');
+  const C = '#8090a0', bg = '#0a0e0e';
+  // U-shape — smaller, centered, with breathing room
+  const CX = 32, baseY = 42, outerR = 13, innerR = 7, prongTop = 18;
+  rect(ctx, CX - outerR, prongTop, outerR - innerR, baseY - prongTop, C);  // left prong
+  rect(ctx, CX + innerR, prongTop, outerR - innerR, baseY - prongTop, C);  // right prong
+  for (let dy = 0; dy <= outerR; dy++)
+    for (let dx = -outerR; dx <= outerR; dx++)
+      if (dx*dx + dy*dy <= outerR*outerR) px(ctx, CX+dx, baseY+dy, C);
+  // Carve inner gap
+  rect(ctx, CX - innerR, prongTop, innerR*2, baseY - prongTop, bg);
+  for (let dy = 0; dy <= innerR; dy++)
+    for (let dx = -innerR; dx <= innerR; dx++)
+      if (dx*dx + dy*dy <= innerR*innerR) px(ctx, CX+dx, baseY+dy, bg);
+  // Nail holes
+  circle(ctx, CX - outerR + 3, prongTop + 6, 1, bg);
+  circle(ctx, CX + outerR - 3, prongTop + 6, 1, bg);
+}
+
+function drawShiftLeftBtn(ctx) {
+  buttonBase(ctx, '#082010');
+  const C = '#30c060';
+  // Up-pointing arrow: tip at y=10, widens down to y=30, shaft to y=54
+  for (let r = 0; r <= 20; r++) hline(ctx, 32 - r, 32 + r, 10 + r, C);
+  rect(ctx, 24, 31, 16, 24, C);
+}
+
+function drawShiftRightBtn(ctx) {
+  buttonBase(ctx, '#180620');
+  const C = '#c030b8';
+  // Down-pointing arrow: tip at y=54, widens up to y=34, shaft from y=10
+  for (let r = 0; r <= 20; r++) hline(ctx, 32 - r, 32 + r, 54 - r, C);
+  rect(ctx, 24, 10, 16, 24, C);
+}
+
+// Composite movement pad — 129×65 native
+// Layout: [Shift Left / Shift Right] | [Move Forward]  (2-column, L/R stacked)
+function drawMovementPad(ctx) {
+  ctx.fillStyle = '#060c18';
+  ctx.fillRect(0, 0, 129, 65);
+
+  // Render each button onto its own 64×64 canvas, then composite in
+  const tmp = fn => { const n = makeNative(64, 64); fn(n.ctx); return n.canvas; };
+  const fwd   = tmp(drawSprintBtn);
+  const left  = tmp(drawShiftLeftBtn);
+  const right = tmp(drawShiftRightBtn);
+
+  ctx.imageSmoothingEnabled = false;
+
+  // Column 1, top: Shift Left scaled 64×64 → 64×32
+  ctx.drawImage(left,  0, 0, 64, 64,  0,  0, 64, 32);
+  // Column 1, bottom: Shift Right scaled 64×64 → 64×32 (1px gap at y=32)
+  ctx.drawImage(right, 0, 0, 64, 64,  0, 33, 64, 32);
+  // Column 2: Move Forward full size (1px gap col at x=64)
+  ctx.drawImage(fwd,                  65,  0);
+
+  // Tighten the 1px separator lines so they show clearly
+  ctx.fillStyle = '#060c18';
+  ctx.fillRect(0, 32, 64, 1);   // row gap
+  ctx.fillRect(64, 0, 1, 65);   // col gap
+}
+
+// ══════════════════════════════════════════
+// STATUS BARS  (128×14)
+// ══════════════════════════════════════════
+
+function barBase(ctx, iconDraw, fillFrac, fillColors, label) {
+  rect(ctx, 0, 0, 128, 14, '#0c1828');
+  // Icon area (12×10 at x=1, centered)
+  iconDraw(ctx);
+  // Track
+  rect(ctx, 14, 2, 112, 10, '#10181e');
+  // Segment dividers (10 segments)
+  for (let i = 0; i <= 10; i++) {
+    const x = 14 + Math.round(112 * i / 10);
+    vline(ctx, x, 2, 11, '#0c1828');
+  }
+  // Fill
+  const fillW = Math.round(112 * fillFrac);
+  if (fillW > 0) {
+    const fc = fillFrac > 0.6 ? fillColors[0] : fillFrac > 0.3 ? fillColors[1] : fillColors[2];
+    rect(ctx, 15, 3, fillW - 1, 8, fc);
+    // Highlight top of fill
+    hline(ctx, 15, 14 + fillW - 1, 3, lighten(fc));
+  }
+  // Border
+  hline(ctx, 14, 125, 2,  '#1e2a3a');
+  hline(ctx, 14, 125, 11, '#080e18');
+  vline(ctx, 14,  2,  11, '#1e2a3a');
+  vline(ctx, 125, 2,  11, '#080e18');
+}
+
+function lighten(hex) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgb(${Math.min(255,r+40)},${Math.min(255,g+40)},${Math.min(255,b+40)})`;
+}
+
+function shieldIcon(ctx) {
+  const c = '#40a8d8', h = '#70d8ff';
+  hline(ctx,2,6,1,c); hline(ctx,1,7,2,c); hline(ctx,1,7,3,c);
+  hline(ctx,1,7,4,c); hline(ctx,1,7,5,c); hline(ctx,2,6,6,c);
+  hline(ctx,3,5,7,c); px(ctx,4,8,c);
+  px(ctx,2,2,h); vline(ctx,1,2,5,h);
+}
+
+function boltIcon(ctx) {
+  const c = '#d0c020', h = '#fff060';
+  hline(ctx,3,7,1,c); hline(ctx,2,6,2,c); hline(ctx,2,6,3,c);
+  hline(ctx,1,5,4,c); hline(ctx,2,6,5,c); hline(ctx,3,7,6,c);
+  hline(ctx,4,8,7,c); hline(ctx,5,9,8,c);
+  px(ctx,4,1,h); px(ctx,3,2,h);
+}
+
+function drawArmorFull(ctx){ barBase(ctx, shieldIcon,1.0,  ['#40a8d8','#4080c0','#206090'], 'AR'); }
+function drawArmorHalf(ctx){ barBase(ctx, shieldIcon,0.5,  ['#40a8d8','#4080c0','#206090'], 'AR'); }
+function drawArmorLow(ctx) { barBase(ctx, shieldIcon,0.2,  ['#40a8d8','#4060b0','#2040a0'], 'AR'); }
+function drawSpeedBar(ctx) { barBase(ctx, boltIcon,  0.6,  ['#d0c020','#d0a020','#d08020'], 'SP'); }
+
+// ══════════════════════════════════════════
+// RACE TRACK HUD  (256×20)
+// ══════════════════════════════════════════
+
+function drawRaceTrack(ctx) {
+  rect(ctx, 0, 0, 256, 20, '#0c1828');
+
+  // Zone color bands
+  const zones = [
+    { x: 2,   w: 32,  c: '#e2d0a8', d: '#c8b888' }, // Shore
+    { x: 34,  w: 54,  c: '#c2a668', d: '#a88c54' }, // Wet Sand
+    { x: 88,  w: 54,  c: '#ead4a0', d: '#c8b078' }, // Dry Sand
+    { x: 142, w: 48,  c: '#6a7c40', d: '#4a5828' }, // Undergrowth
+    { x: 190, w: 36,  c: '#383028', d: '#2a2018' }, // Treeline
+    { x: 226, w: 28,  c: '#384828', d: '#283018' }, // Deep trees (finish)
+  ];
+
+  zones.forEach(z => {
+    // Checkerboard texture (very subtle)
+    for (let x = z.x; x < z.x + z.w; x++) {
+      for (let y = 2; y <= 17; y++) {
+        const c = ((x + y) % 4 < 2) ? z.c : z.d;
+        px(ctx, x, y, c);
+      }
+    }
+  });
+
+  // Track border
+  hline(ctx, 1, 254, 1,  '#1e2a3a');
+  hline(ctx, 1, 254, 18, '#0a1018');
+  vline(ctx, 1,  1,  18, '#1e2a3a');
+  vline(ctx, 254,1,  18, '#0a1018');
+
+  // Start line
+  for (let y = 2; y <= 17; y++) {
+    const c = Math.floor(y / 2) % 2 === 0 ? '#f0f0e0' : '#202020';
+    px(ctx, 34, y, c); px(ctx, 35, y, c);
+  }
+
+  // Finish line
+  for (let y = 2; y <= 17; y++) {
+    const c = Math.floor(y / 2) % 2 === 0 ? '#f8e840' : '#202020';
+    px(ctx, 228, y, c); px(ctx, 229, y, c);
+  }
+
+  // Obstacle markers (tiny colored dots)
+  const obstacles = [
+    { x: 52,  c: '#7898b0' }, // crab hole
+    { x: 62,  c: '#9060c8' }, // jellyfish
+    { x: 100, c: '#888870' }, // rock
+    { x: 120, c: '#e04888' }, // beach setup
+    { x: 150, c: '#c09848' }, // fishing net
+    { x: 170, c: '#888870' }, // rock
+  ];
+  obstacles.forEach(o => {
+    px(ctx, o.x, 9,  o.c);
+    px(ctx, o.x, 10, o.c);
+    px(ctx, o.x+1, 9, o.c);
+    px(ctx, o.x+1,10, o.c);
+  });
+
+  // Player dots (50 crabs scattered along track, current player highlighted)
+  const rng = (seed) => { let s = seed; return () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; };
+  const rand = rng(42);
+  const playerColors = ['#7ec8e3','#c2f0c2','#b0a090','#e0a84b','#b07fe0'];
+  for (let i = 0; i < 50; i++) {
+    const trackX = Math.round(36 + rand() * 188);
+    const trackY = Math.round(3  + rand() * 13);
+    const col = playerColors[Math.floor(rand() * 5)];
+    px(ctx, trackX, trackY, col);
+  }
+
+  // My player (current crab — larger, glowing)
+  const myX = 110, myY = 10;
+  px(ctx, myX-1, myY,   '#ffffff');
+  px(ctx, myX+1, myY,   '#ffffff');
+  px(ctx, myX,   myY-1, '#ffffff');
+  px(ctx, myX,   myY+1, '#ffffff');
+  px(ctx, myX,   myY,   '#ffff80');
+
+  // Rank text area (left end)
+  rect(ctx, 0, 0, 1, 20, '#1e3050');
+}
+
+// ══════════════════════════════════════════
+// ZONE BADGES  (72×18)
+// ══════════════════════════════════════════
+
+function zoneBadge(ctx, zoneColor, pillBg, icon) {
+  // Pill background
+  rect(ctx, 0, 0, 72, 18, '#0c1828');
+  rect(ctx, 1, 1, 70, 16, pillBg);
+  hline(ctx, 2, 69, 1,  zoneColor + '80');
+  hline(ctx, 2, 69, 16, '#08101888');
+  vline(ctx, 1, 2,  15, zoneColor + '80');
+  vline(ctx, 70,2,  15, '#08101888');
+
+  // Small zone tile icon (8×8 at left, padded)
+  const ictx = ctx;
+  icon(ictx, 4, 5);
+
+  // Separator
+  vline(ctx, 16, 3, 14, zoneColor + '60');
+}
+
+function shoreIcon(ctx, ox, oy) {
+  rect(ctx, ox,   oy,   8, 8, '#e2d0a8');
+  px(ctx, ox+2,oy+2, '#f0e0c0'); px(ctx, ox+5,oy+5, '#f0e0c0');
+  px(ctx, ox+1,oy+5, '#c0d0d8'); px(ctx, ox+6,oy+2, '#c0d0d8');
+}
+function wetSandIcon(ctx, ox, oy) {
+  rect(ctx, ox, oy, 8, 8, '#c2a668');
+  rect(ctx, ox+1,oy+3, 4, 2, '#7898b0'); px(ctx, ox+2,oy+3,'#9ab4c4');
+}
+function drySandIcon(ctx, ox, oy) {
+  rect(ctx, ox, oy, 8, 8, '#ead4a0');
+  px(ctx, ox+2,oy+2,'#a89878'); px(ctx, ox+5,oy+5,'#a89878');
+  px(ctx, ox+4,oy+1,'#a89878');
+}
+function undergrowthIcon(ctx, ox, oy) {
+  rect(ctx, ox, oy, 8, 8, '#6a7c40');
+  px(ctx,ox+2,oy+3,'#a0c858'); px(ctx,ox+2,oy+2,'#a0c858');
+  px(ctx,ox+1,oy+3,'#a0c858'); px(ctx,ox+3,oy+3,'#a0c858');
+  px(ctx,ox+5,oy+5,'#a0c858'); px(ctx,ox+5,oy+4,'#a0c858');
+}
+function treelineIcon(ctx, ox, oy) {
+  rect(ctx, ox, oy, 8, 8, '#383028');
+  circle(ctx, ox+3, oy+3, 2, '#4a6030');
+  circle(ctx, ox+6, oy+6, 2, '#3a5020');
+}
+
+function drawShoreZone(ctx)       { zoneBadge(ctx,'#7ec8e3','#1a2c3a',shoreIcon); }
+function drawWetSandZone(ctx)     { zoneBadge(ctx,'#60b8d8','#192430',wetSandIcon); }
+function drawDrySandZone(ctx)     { zoneBadge(ctx,'#dbb848','#28200c',drySandIcon); }
+function drawUndergrowthZone(ctx) { zoneBadge(ctx,'#80c040','#182010',undergrowthIcon); }
+function drawTreelineZone(ctx)    { zoneBadge(ctx,'#58c028','#0e1a08',treelineIcon); }
+
+// ══════════════════════════════════════════
+// COMBAT EFFECTS  (32×32)
+// ══════════════════════════════════════════
+
+function drawReticle(ctx) {
+  // Dark transparent center
+  rect(ctx, 0, 0, 32, 32, '#00000000');
+
+  const C = '#e0e840', D = '#a0a020';
+
+  // Corner brackets (4 corners)
+  function corner(ctx, ox, oy, mx, my) {
+    hline(ctx, ox,       ox + mx*5, oy,       C);
+    hline(ctx, ox,       ox + mx*5, oy + my,  D);
+    vline(ctx, ox,       oy,        oy + my*5, C);
+    vline(ctx, ox + mx,  oy,        oy + my*5, D);
+  }
+  corner(ctx,  2,  2,  1,  1);  // top-left
+  corner(ctx, 29,  2, -1,  1);  // top-right
+  corner(ctx,  2, 29,  1, -1);  // bottom-left
+  corner(ctx, 29, 29, -1, -1);  // bottom-right
+
+  // Cross hair (center)
+  hline(ctx, 14, 17, 15, D); hline(ctx, 14, 17, 16, D);
+  vline(ctx, 15, 14, 17, D); vline(ctx, 16, 14, 17, D);
+  // Center dot
+  px(ctx, 15, 15, C); px(ctx, 16, 15, C);
+  px(ctx, 15, 16, C); px(ctx, 16, 16, C);
+
+  // Diagonal tick marks
+  px(ctx, 10, 10, D); px(ctx, 11, 11, D);
+  px(ctx, 21, 10, D); px(ctx, 20, 11, D);
+  px(ctx, 10, 21, D); px(ctx, 11, 20, D);
+  px(ctx, 21, 21, D); px(ctx, 20, 20, D);
+}
+
+function drawImpact(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#00000000');
+
+  const CX = 16, CY = 16;
+  const C = '#ff8820', H = '#ffe060', S = '#c04010';
+
+  // Inner flash core
+  circle(ctx, CX, CY, 4, H);
+  circle(ctx, CX, CY, 2, '#ffffff');
+
+  // 8 burst rays
+  const rays = [
+    [0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]
+  ];
+  const lens = [10, 7, 10, 7, 10, 7, 10, 7];
+
+  rays.forEach(([dx, dy], i) => {
+    const len = lens[i];
+    for (let r = 5; r < 5 + len; r++) {
+      const x = Math.round(CX + dx * r * (Math.abs(dx)===Math.abs(dy)?0.7:1));
+      const y = Math.round(CY + dy * r * (Math.abs(dx)===Math.abs(dy)?0.7:1));
+      if (x >= 0 && x < 32 && y >= 0 && y < 32) {
+        const fade = r - 5;
+        px(ctx, x, y, fade < 4 ? H : fade < 8 ? C : S);
+      }
+    }
+  });
+
+  // Spark dots
+  [[8,4],[24,4],[4,8],[28,8],[4,24],[28,24],[8,28],[24,28]].forEach(([x,y]) => {
+    px(ctx, x, y, H);
+  });
+}
+
+function drawShieldSpark(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#00000000');
+
+  const C = '#40d0c8', H = '#a0f8f0', S = '#1080a0';
+
+  // Shield shape (small, centered)
+  for (let y = 8; y <= 24; y++) {
+    let x1, x2;
+    if (y <= 16)      { const t=(y-8)/8; x1=Math.round(12-t*2); x2=Math.round(20+t*2); }
+    else if (y <= 20) { x1=10; x2=22; }
+    else              { const t=(y-20)/4; x1=Math.round(10+t*6); x2=Math.round(22-t*6); }
+    hline(ctx, x1, x2, y, y < 12 ? H : C);
+    px(ctx, x1, y, H); px(ctx, x2, y, S);
+  }
+
+  // Deflection sparks radiating out
+  const sparks = [[4,4],[6,2],[28,4],[26,2],[4,28],[6,30],[28,28],[30,26],[2,14],[30,14]];
+  sparks.forEach(([x,y], i) => {
+    px(ctx, x, y, i % 2 === 0 ? H : C);
+    px(ctx, x+(x<16?-1:1), y, S);
+  });
+
+  // Ripple rings
+  ring(ctx, 16, 16, 6, C + '80');
+  ring(ctx, 16, 16, 12, S + '60');
+}
+
+function drawStunBurst(ctx) {
+  rect(ctx, 0, 0, 32, 32, '#00000000');
+
+  const CX = 16, CY = 14;
+
+  // Three rotating stars
+  function star(ctx, cx, cy, c1, c2) {
+    px(ctx, cx,   cy-2, c1); px(ctx, cx,   cy+2, c1);
+    px(ctx, cx-2, cy,   c1); px(ctx, cx+2, cy,   c1);
+    px(ctx, cx-1, cy-1, c2); px(ctx, cx+1, cy-1, c2);
+    px(ctx, cx-1, cy+1, c2); px(ctx, cx+1, cy+1, c2);
+    px(ctx, cx,   cy,   '#ffffff');
+  }
+
+  star(ctx, CX - 7, CY - 4, '#f8e020', '#d0a010');
+  star(ctx, CX + 7, CY - 4, '#f8e020', '#d0a010');
+  star(ctx, CX,     CY + 6, '#f8e020', '#d0a010');
+
+  // "!!" below
+  for (let y=22; y<=28; y++) {
+    px(ctx, 13, y, '#f8e020'); px(ctx, 19, y, '#f8e020');
+  }
+  px(ctx, 13, 30, '#f8e020'); px(ctx, 19, 30, '#f8e020');
+
+  // Wavy lines (dazed)
+  hline(ctx, 8,  12, 20, '#806000');
+  hline(ctx, 20, 24, 18, '#806000');
+}
+
+// ══════════════════════════════════════════
+// STATUS ICONS  (16×16)
+// ══════════════════════════════════════════
+
+function drawStunIcon(ctx) {
+  rect(ctx, 0, 0, 16, 16, '#201808');
+  circle(ctx, 8, 8, 7, '#302010');
+  // Star
+  px(ctx,8,2,'#f8e020'); px(ctx,8,3,'#f8e020');
+  px(ctx,3,5,'#f8e020'); px(ctx,4,6,'#f8e020');
+  px(ctx,13,5,'#f8e020'); px(ctx,12,6,'#f8e020');
+  px(ctx,5,12,'#f8e020'); px(ctx,6,11,'#f8e020');
+  px(ctx,11,12,'#f8e020'); px(ctx,10,11,'#f8e020');
+  // Center dot
+  circle(ctx, 8, 8, 2, '#f8e020');
+  px(ctx, 8, 8, '#ffffff');
+}
+
+function drawTrapIcon(ctx) {
+  rect(ctx, 0, 0, 16, 16, '#181008');
+  circle(ctx, 8, 8, 7, '#281808');
+  // Rope loop
+  for (let a=0; a<360; a+=15) {
+    const rad=a*Math.PI/180;
+    px(ctx, Math.round(8+5*Math.cos(rad)), Math.round(8+5*Math.sin(rad)), '#c09040');
+  }
+  // Knot center
+  circle(ctx, 8, 8, 2, '#a07030');
+  px(ctx, 8, 8, '#d0b060');
+}
+
+function drawImmuneIcon(ctx) {
+  rect(ctx, 0, 0, 16, 16, '#081408');
+  circle(ctx, 8, 8, 7, '#082808');
+  // Shield checkmark
+  circle(ctx, 8, 8, 5, '#30a860');
+  circle(ctx, 8, 8, 3, '#082808');
+  // Check
+  px(ctx,5,8,'#50e880'); px(ctx,6,9,'#50e880'); px(ctx,7,10,'#50e880');
+  px(ctx,8,9,'#50e880'); px(ctx,9,8,'#50e880'); px(ctx,10,7,'#50e880');
+  px(ctx,11,6,'#50e880');
+}
+
+function drawSpeedIcon(ctx) {
+  rect(ctx, 0, 0, 16, 16, '#181400');
+  circle(ctx, 8, 8, 7, '#282000');
+  // Lightning bolt
+  px(ctx,9,2,'#f8e040'); px(ctx,8,2,'#f8e040');
+  hline(ctx,7,9,3,'#f8e040');
+  hline(ctx,6,8,4,'#f8e040');
+  hline(ctx,5,8,5,'#f8e040');
+  hline(ctx,7,10,6,'#f0c020');
+  hline(ctx,8,11,7,'#f0c020');
+  hline(ctx,9,12,8,'#f0c020');
+  px(ctx,10,9,'#f0c020'); px(ctx,11,10,'#d0a010');
+  // Glow
+  px(ctx, 8, 1, '#fff8a0'); px(ctx, 9, 1, '#fff8a0');
+}
+
+// ══════════════════════════════════════════
+// ASSEMBLED HUD MOCKUP  (320×120)
+// ══════════════════════════════════════════
+
+function drawHUDMockup(ctx) {
+  const W = 320, H = 120;
+
+  // Terrain background
+  rect(ctx, 0, 0, W, H, '#c0a468');
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if ((x + y) % 9 < 2) px(ctx, x, y, '#d0b478');
+
+  // Armor bar — top-left, drawn at native 128×14
+  const armorN = makeNative(128, 14); drawArmorHalf(armorN.ctx);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(armorN.canvas, 8, 8);
+
+  // Movement pad — bottom-right, drawn at native 129×65
+  const padN = makeNative(129, 65); drawMovementPad(padN.ctx);
+  ctx.drawImage(padN.canvas, W - 129 - 8, H - 65 - 8);
+}
+
+// ══════════════════════════════════════════
+// RENDER SYSTEM
+// ══════════════════════════════════════════
+
+function makeNative(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  return { canvas: c, ctx };
+}
+
+function scaleUp(native, scale) {
+  const c = document.createElement('canvas');
+  c.width = native.width * scale;
+  c.height = native.height * scale;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(native, 0, 0, c.width, c.height);
+  return c;
+}
+
+function addCard(container, drawFn, w, h, scale, name, sub, accentColor, dlName) {
+  const { canvas: nat, ctx } = makeNative(w, h);
+  drawFn(ctx);
+  const display = scaleUp(nat, scale);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.setProperty('--accent', accentColor);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'canvas-wrap';
+  wrap.appendChild(display);
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'asset-name';
+  nameEl.textContent = name;
+
+  const subEl = document.createElement('div');
+  subEl.className = 'asset-sub';
+  subEl.textContent = sub;
+
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.textContent = '↓ PNG';
+  btn.addEventListener('click', () => {
+    const link = document.createElement('a');
+    link.download = `${dlName}.png`;
+    link.href = nat.toDataURL('image/png');
+    link.click();
+  });
+
+  card.append(wrap, nameEl, subEl, btn);
+  container.appendChild(card);
+}
+
+// Action buttons — single composite movement pad
+const bRow = document.getElementById('buttons-row');
+addCard(bRow, drawMovementPad, 129, 65, 2, 'Movement Pad', 'Shift L/R · Move Forward · 2-col', '#5098e8', 'btn-movement-pad');
+
+// Crab abilities
+const abRow = document.getElementById('abilities-row');
+[
+  [drawRockBtn,      'Rock',      'Stone Crab · Throw',     '#909080', 'ability-rock'     ],
+  [drawCoconutBtn,   'Coconut',   'Coconut Crab · Throw',   '#c08848', 'ability-coconut'  ],
+  [drawWebBtn,       'Web',       'Spider Crab · Throw',    '#e0d8b8', 'ability-web'      ],
+  [drawHorseshoeBtn, 'Horseshoe', 'Horseshoe Crab · Throw', '#808888', 'ability-horseshoe'],
+].forEach(([fn, name, sub, accent, dl]) => addCard(abRow, fn, 64, 64, 2, name, sub, accent, dl));
+
+// Status bars
+const barRow = document.getElementById('bars-row');
+[
+  [drawArmorFull, 'Armor — Full', '128×14', '#40a8d8', 'bar-armor-full'],
+  [drawArmorHalf, 'Armor — Half', '128×14', '#4080c0', 'bar-armor-half'],
+  [drawArmorLow,  'Armor — Low',  '128×14', '#2040a0', 'bar-armor-low' ],
+].forEach(([fn, name, sub, accent, dl]) => addCard(barRow, fn, 128, 14, 2, name, sub, accent, dl));
+
+// Race HUD
+const hudRow = document.getElementById('hud-row');
+addCard(hudRow, drawRaceTrack, 256, 20, 2, 'Race Progress Bar', '256×20 · 50 player positions', '#7ec8e3', 'hud-race-track');
+
+// Zone badges
+const zonesRow = document.getElementById('zones-row');
+[
+  [drawShoreZone,       'Shore',       '72×18', '#7ec8e3', 'zone-shore'      ],
+  [drawWetSandZone,     'Wet Sand',    '72×18', '#60b8d8', 'zone-wet-sand'   ],
+  [drawDrySandZone,     'Dry Sand',    '72×18', '#dbb848', 'zone-dry-sand'   ],
+  [drawUndergrowthZone, 'Undergrowth', '72×18', '#80c040', 'zone-undergrowth'],
+  [drawTreelineZone,    'Treeline',    '72×18', '#58c028', 'zone-treeline'   ],
+].forEach(([fn, name, sub, accent, dl]) => addCard(zonesRow, fn, 72, 18, 2, name, sub, accent, dl));
+
+// Combat effects
+const effectsRow = document.getElementById('effects-row');
+[
+  [drawReticle,    'Target Reticle', '32×32', '#e0e840', 'fx-reticle'  ],
+  [drawImpact,     'Impact Burst',   '32×32', '#ff8820', 'fx-impact'   ],
+  [drawShieldSpark,'Shield Deflect', '32×32', '#40d0c8', 'fx-shield'   ],
+  [drawStunBurst,  'Stun Burst',     '32×32', '#f8e020', 'fx-stun'     ],
+].forEach(([fn, name, sub, accent, dl]) => addCard(effectsRow, fn, 32, 32, 4, name, sub, accent, dl));
+
+// Status icons
+const iconsRow = document.getElementById('icons-row');
+[
+  [drawStunIcon,  'Stunned',    '16×16', '#f8e020', 'icon-stun'  ],
+  [drawTrapIcon,  'Trapped',    '16×16', '#c09040', 'icon-trap'  ],
+  [drawImmuneIcon,'Immune',     '16×16', '#50e880', 'icon-immune'],
+  [drawSpeedIcon, 'Speed Boost','16×16', '#f8e040', 'icon-speed' ],
+].forEach(([fn, name, sub, accent, dl]) => addCard(iconsRow, fn, 16, 16, 5, name, sub, accent, dl));
+
+// HUD Mockup
+const { canvas: mockupNat, ctx: mCtx } = makeNative(320, 120);
+mCtx.imageSmoothingEnabled = false;
+drawHUDMockup(mCtx);
+const mockupDisplay = scaleUp(mockupNat, 2);
+mockupDisplay.id = 'mockup-canvas';
+document.getElementById('mockup-canvas').replaceWith(mockupDisplay);
+mockupDisplay.style.imageRendering = 'pixelated';
+</script>
+</body>
+</html>

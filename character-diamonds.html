@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crab Racing — Character Diamonds</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0f1e;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e8eaf0;
+    min-height: 100vh;
+    padding: 40px 24px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 1.5rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7ec8e3;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #556;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 48px;
+  }
+
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 36px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.65rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #778;
+  }
+
+  .legend-swatch {
+    width: 28px;
+    height: 3px;
+    border-radius: 2px;
+  }
+
+  .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 32px;
+    justify-content: center;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .card {
+    background: #111827;
+    border-radius: 16px;
+    padding: 28px 24px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 210px;
+    border: 1px solid #1e2a3a;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+  }
+
+  .crab-name {
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .crab-tagline {
+    font-size: 0.65rem;
+    color: #556;
+    margin-bottom: 20px;
+    letter-spacing: 0.05em;
+  }
+
+  .diamond-wrap {
+    position: relative;
+    width: 170px;
+    height: 170px;
+    margin-bottom: 20px;
+  }
+
+  .stat-bar-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: 48px 1fr 38px;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .stat-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #778;
+    text-align: right;
+  }
+
+  /* two-part track: base (dim) + range (bright) */
+  .stat-track {
+    height: 5px;
+    background: #1a2235;
+    border-radius: 3px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat-base {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    border-radius: 3px 0 0 3px;
+    opacity: 0.45;
+  }
+
+  .stat-range {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    border-radius: 0 3px 3px 0;
+    opacity: 0.9;
+  }
+
+  /* tick at base boundary */
+  .stat-tick {
+    position: absolute;
+    top: -1px;
+    width: 1.5px;
+    height: calc(100% + 2px);
+    background: #fff;
+    opacity: 0.3;
+  }
+
+  .stat-val {
+    font-size: 0.6rem;
+    color: #aab;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    letter-spacing: 0;
+  }
+
+  .stat-val .sep { color: #334; margin: 0 1px; }
+  .stat-val .cap { color: var(--accent); opacity: 0.9; }
+
+  /* spend badge */
+  .spend-badge {
+    margin-top: 14px;
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #445;
+    border: 1px solid #1e2a3a;
+    border-radius: 20px;
+    padding: 3px 10px;
+  }
+
+  .spend-badge span { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>Character Diamonds</h1>
+<p class="subtitle">Crab Racing v6.0 — Base &amp; Cap stats · 4-axis profile</p>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#fff;opacity:0.18;border:1px dashed #556;"></div>
+    Base stats
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:#7ec8e3;"></div>
+    Cap (max build)
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:linear-gradient(to right,rgba(255,255,255,0.08),rgba(255,255,255,0.22));border:1px solid #334;"></div>
+    Build range
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<script>
+const MAX = { speed: 10, armor: 10, size: 8, throw: 8 };
+
+const CRABS = [
+  {
+    name: 'Horseshoe',
+    tagline: 'The Immovable Object',
+    accent: '#4e9af1',
+    base:  { speed: 1, armor: 4,  size: 2, throw: 1 },
+    cap:   { speed: 3, armor: 10, size: 5, throw: 2 },
+    spend: 12,
+  },
+  {
+    name: 'Ghost',
+    tagline: 'Melee Speedster',
+    accent: '#c2f0c2',
+    base:  { speed: 5, armor: 1, size: 1, throw: 1 },
+    cap:   { speed: 10, armor: 4, size: 2, throw: 1 },
+    spend: 9,
+    throwLocked: true,
+  },
+  {
+    name: 'Stone',
+    tagline: 'Armored Bombardier',
+    accent: '#b0a090',
+    base:  { speed: 1, armor: 2, size: 3, throw: 2 },
+    cap:   { speed: 4, armor: 6, size: 6, throw: 8 },
+    spend: 16,
+  },
+  {
+    name: 'Coconut',
+    tagline: 'Big Long-Range Bruiser',
+    accent: '#e0a84b',
+    base:  { speed: 1, armor: 1, size: 4, throw: 2 },
+    cap:   { speed: 4, armor: 4, size: 8, throw: 7 },
+    spend: 15,
+  },
+  {
+    name: 'Spider',
+    tagline: 'Lanky Generalist',
+    accent: '#b07fe0',
+    base:  { speed: 4, armor: 1, size: 2, throw: 1 },
+    cap:   { speed: 7, armor: 4, size: 6, throw: 3 },
+    spend: 12,
+  },
+];
+
+function poly(cx, cy, r, sn, tn, an, szn) {
+  return [
+    [cx,          cy - sn * r],
+    [cx + tn * r, cy          ],
+    [cx,          cy + an * r],
+    [cx - szn * r, cy         ],
+  ].map(p => p.map(v => v.toFixed(2)).join(',')).join(' ');
+}
+
+function makeDiamond(crab) {
+  const S = 170;
+  const CX = S / 2, CY = S / 2;
+  const R = 68;
+
+  const { base, cap, accent } = crab;
+
+  const bn = {
+    speed: base.speed / MAX.speed,
+    armor: base.armor / MAX.armor,
+    size:  base.size  / MAX.size,
+    throw: base.throw / MAX.throw,
+  };
+  const cn = {
+    speed: cap.speed / MAX.speed,
+    armor: cap.armor / MAX.armor,
+    size:  cap.size  / MAX.size,
+    throw: cap.throw / MAX.throw,
+  };
+
+  const basePts = poly(CX, CY, R, bn.speed, bn.throw, bn.armor, bn.size);
+  const capPts  = poly(CX, CY, R, cn.speed, cn.throw, cn.armor, cn.size);
+
+  // guide rings
+  const rings = [0.25, 0.5, 0.75, 1.0].map(f => {
+    const r = f * R;
+    const rpts = [
+      `${CX},${(CY-r).toFixed(2)}`,
+      `${(CX+r).toFixed(2)},${CY}`,
+      `${CX},${(CY+r).toFixed(2)}`,
+      `${(CX-r).toFixed(2)},${CY}`,
+    ].join(' ');
+    return `<polygon points="${rpts}" fill="none" stroke="#1e2a3a" stroke-width="${f===1?1.5:0.6}"/>`;
+  }).join('');
+
+  // axis lines
+  const axes = [
+    [CX, CY-R],[CX+R,CY],[CX,CY+R],[CX-R,CY]
+  ].map(([x,y]) =>
+    `<line x1="${CX}" y1="${CY}" x2="${x.toFixed(2)}" y2="${y.toFixed(2)}" stroke="#1e2a3a" stroke-width="0.6"/>`
+  ).join('');
+
+  // range fill between base and cap (clip trick: draw cap fill, then mask with base)
+  // Easier: draw cap fill at low opacity, then base fill slightly higher to "cut" look
+  // Actually: draw cap polygon filled, then base polygon in background color to subtract = tricky in SVG without clip.
+  // Best approach: draw the build-range band by drawing cap then base on top in bg color.
+  // Use a simpler layering: cap fill (low opacity) → base fill (bg color fill to punch out center) → base outline dashed
+
+  const bgColor = '#111827';
+
+  // cap dots
+  const capDots = [
+    [CX,            CY - cn.speed * R],
+    [CX + cn.throw * R, CY           ],
+    [CX,            CY + cn.armor * R],
+    [CX - cn.size * R, CY            ],
+  ].map(([x,y]) => `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="3" fill="${accent}"/>`).join('');
+
+  // base dots
+  const baseDots = [
+    [CX,            CY - bn.speed * R],
+    [CX + bn.throw * R, CY           ],
+    [CX,            CY + bn.armor * R],
+    [CX - bn.size * R, CY            ],
+  ].map(([x,y]) => `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="${bgColor}" stroke="${accent}" stroke-width="1.2" opacity="0.7"/>`).join('');
+
+  // axis labels
+  const labels = [
+    { x: CX,     y: CY-R-10, text:'SPD', anchor:'middle' },
+    { x: CX+R+10, y: CY+4,   text:'THR', anchor:'start'  },
+    { x: CX,     y: CY+R+14, text:'ARM', anchor:'middle' },
+    { x: CX-R-10, y: CY+4,   text:'SZE', anchor:'end'    },
+  ];
+  const labelsSVG = labels.map(l =>
+    `<text x="${l.x}" y="${l.y}" text-anchor="${l.anchor}" font-size="7.5" fill="#3a4a5a" font-family="system-ui" letter-spacing="0.06em" font-weight="600">${l.text}</text>`
+  ).join('');
+
+  return `
+<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
+  ${rings}
+  ${axes}
+  <!-- cap: filled area -->
+  <polygon points="${capPts}" fill="${accent}" fill-opacity="0.12" stroke="${accent}" stroke-width="1.6" stroke-linejoin="round"/>
+  <!-- base: punch out center, show as bg fill + dashed border -->
+  <polygon points="${basePts}" fill="${bgColor}" fill-opacity="1" stroke="${accent}" stroke-width="1" stroke-dasharray="3 2" stroke-linejoin="round" opacity="0.75"/>
+  ${capDots}
+  ${baseDots}
+  ${labelsSVG}
+</svg>`.trim();
+}
+
+function statBar(label, baseVal, capVal, maxVal, accent, locked) {
+  const basePct = (baseVal / maxVal * 100).toFixed(1);
+  const rangePct = ((capVal - baseVal) / maxVal * 100).toFixed(1);
+  const lockedNote = locked ? ' <span style="color:#334;font-size:0.55rem">(locked)</span>' : '';
+  return `
+    <div class="stat-row">
+      <span class="stat-label">${label}</span>
+      <div class="stat-track">
+        <div class="stat-base"  style="width:${basePct}%;background:${accent}"></div>
+        <div class="stat-range" style="left:${basePct}%;width:${rangePct}%;background:${accent}"></div>
+        <div class="stat-tick"  style="left:${basePct}%"></div>
+      </div>
+      <span class="stat-val">${baseVal}<span class="sep">→</span><span class="cap">${capVal}</span>${lockedNote}</span>
+    </div>`;
+}
+
+const grid = document.getElementById('grid');
+
+CRABS.forEach(crab => {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.setProperty('--accent', crab.accent);
+
+  card.innerHTML = `
+    <div class="crab-name">${crab.name} Crab</div>
+    <div class="crab-tagline">${crab.tagline}</div>
+    <div class="diamond-wrap">${makeDiamond(crab)}</div>
+    <div class="stat-bar-list">
+      ${statBar('Speed', crab.base.speed, crab.cap.speed, MAX.speed, crab.accent)}
+      ${statBar('Armor', crab.base.armor, crab.cap.armor, MAX.armor, crab.accent)}
+      ${statBar('Size',  crab.base.size,  crab.cap.size,  MAX.size,  crab.accent)}
+      ${statBar('Throw', crab.base.throw, crab.cap.throw, MAX.throw, crab.accent, crab.throwLocked)}
+    </div>
+    <div class="spend-badge">Build pts: <span>${crab.spend}</span></div>
+  `;
+
+  grid.appendChild(card);
+});
+</script>
+</body>
+</html>
