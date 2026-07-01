@@ -13,16 +13,12 @@ services:
 
   # ── Node.js WebSocket + Kafka server ──────────────────────────
   server:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - .:/app
+    build: .
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
       KAFKA_BROKER: kafka:9092
-    command: sh -c "npm install && node server.js"
     depends_on:
       kafka:
         condition: service_healthy
