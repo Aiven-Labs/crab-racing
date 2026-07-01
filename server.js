@@ -77,30 +77,75 @@ const ZONES = [
 const TOTAL_CELLS = ZONES.reduce((s, z) => s + z.len, 0); // 46
 const FINISH_CELL = TOTAL_CELLS - 3;                        // 43
 
-const OBSTACLES = [
-  { cell: 7,  lane: 0, effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
-  { cell: 9,  lane: 2, effect: 'stun',  turns: 1, msg: 'STUNG!'               },
-  { cell: 11, lane: 1, effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
-  { cell: 15, lane: 1, effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { cell: 17, lane: 0, effect: 'push',             msg: 'TOURIST KICKED YOU!' },
-  { cell: 19, lane: 2, effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { cell: 22, lane: 1, effect: 'push',             msg: 'TOURIST KICKED YOU!' },
-  { cell: 26, lane: 0, effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
-  { cell: 28, lane: 2, effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
-  { cell: 30, lane: 1, effect: 'stun',  turns: 1, msg: 'STUNG!'               },
-  { cell: 33, lane: 0, effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { cell: 36, lane: 2, effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { cell: 39, lane: 1, effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
-  { cell: 41, lane: 0, effect: 'stun',  turns: 1, msg: 'STUNG!'               },
+// Obstacles are placed procedurally from a per-room seed so every race gets a
+// fresh but fair layout. This server is authoritative: it picks the seed (or
+// honours a custom one from the joining player) and ships it to every client so
+// they render/simulate the identical track.
+//
+// IMPORTANT: keep this generator byte-for-byte identical to the one in game.html
+// — the same seed must produce the same obstacles on both sides.
+const OBSTACLE_KINDS = [
+  { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
+  { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+  { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
+  { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
+  { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
 ];
-const OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
+
+// xmur3 string hash → 32-bit int (lets custom seeds be arbitrary strings)
+function hashSeed(str) {
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  h = Math.imul(h ^ (h >>> 16), 2246822507);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+// mulberry32 — small deterministic PRNG seeded by a 32-bit int
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Deterministically place obstacles. At most one per cell column, so at least
+// two lanes are always open — the track is never fully blocked.
+function generateObstacles(seed, opts) {
+  const { lanes, startCell, finishCell, density = 0.38 } = opts;
+  const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
+  const rng = mulberry32(seedNum);
+  const list = [];
+  for (let cell = startCell; cell < finishCell - 1; cell++) {
+    if (rng() >= density) continue;
+    const lane = Math.floor(rng() * lanes);
+    const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
+    list.push({ cell, lane, ...kind });
+  }
+  return list;
+}
+
+/** Build the obstacle list + lookup map for a given seed. */
+function buildObstacles(seed) {
+  const obstacles = generateObstacles(seed, {
+    lanes: LANES, startCell: 6, finishCell: FINISH_CELL,
+  });
+  const map = new Map(obstacles.map(o => [`${o.cell},${o.lane}`, o]));
+  return { obstacles, map };
+}
 
 // ── server state ────────────────────────────────────────────────────────────────
 const rooms   = new Map(); // roomId → Room
 const clients = new Map(); // ws     → { playerId, roomId, name }
 
-function makeRoom(id) {
-  return { id, players: new Map(), started: false, finished: false };
+function makeRoom(id, seed) {
+  const { obstacles, map } = buildObstacles(seed);
+  return { id, players: new Map(), started: false, finished: false, seed, obsMap: map, obstacles };
 }
 
 function makePlayer(id, name, colorIdx) {
@@ -145,7 +190,7 @@ function applyMove(room, playerId, dx, dlane) {
   const nl = p.lane + dlane;
   if (nc < 0 || nc >= TOTAL_CELLS || nl < 0 || nl >= LANES) return { ok: false };
 
-  const obs = OBS_MAP.get(`${nc},${nl}`);
+  const obs = room.obsMap.get(`${nc},${nl}`);
   if (obs?.effect === 'block') {
     return { ok: true, effect: 'block', msg: obs.msg };
   }
@@ -176,7 +221,7 @@ function startCountdown(room, roomId) {
     broadcast(roomId, { type: 'countdown', count });
     if (count-- <= 0) {
       clearInterval(tick);
-      broadcast(roomId, { type: 'go', players: snapshot(room) });
+      broadcast(roomId, { type: 'go', seed: room.seed, players: snapshot(room) });
     }
   }, 1000);
 }
@@ -273,9 +318,14 @@ async function main() {
       if (msg.type === 'join') {
         const name   = (msg.name   || 'Crab').slice(0, 20);
         const roomId = (msg.roomId || 'room1').slice(0, 32);
+        // First player to create the room fixes its seed: a custom seed if they
+        // supplied one, otherwise a random one. Later joiners inherit it.
+        const seed = (msg.seed != null && String(msg.seed).trim())
+          ? String(msg.seed).slice(0, 32)
+          : (Math.floor(Math.random() * 0xffffffff)).toString();
 
         let room = rooms.get(roomId);
-        if (!room) { room = makeRoom(roomId); rooms.set(roomId, room); }
+        if (!room) { room = makeRoom(roomId, seed); rooms.set(roomId, room); }
 
         if (room.started) {
           sendTo(ws, { type: 'error', msg: 'Race already started — try another room' });
@@ -287,7 +337,7 @@ async function main() {
         room.players.set(playerId, makePlayer(playerId, name, colorIdx));
         clients.set(ws, { playerId, roomId, name });
 
-        sendTo(ws, { type: 'joined', playerId, colorIdx, players: snapshot(room) });
+        sendTo(ws, { type: 'joined', playerId, colorIdx, seed: room.seed, players: snapshot(room) });
         broadcast(roomId, { type: 'player-joined', name, players: snapshot(room) });
         console.log(`[room:${roomId}] ${name} joined (${room.players.size} players)`);
 
@@ -328,7 +378,7 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
         room.started = true;
-        broadcast(info.roomId, { type: 'go', players: snapshot(room) });
+        broadcast(info.roomId, { type: 'go', seed: room.seed, players: snapshot(room) });
       }
     });
 
