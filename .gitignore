@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Local env / secrets
+.env
+.env.local
+
+# Kafka client certificates & keys (Aiven mTLS) — never commit
+certs/
+*.pem
+*.key
+*.cert

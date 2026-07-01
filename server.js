@@ -45,11 +45,29 @@ function serveStatic(req, res) {
   });
 }
 
-const PORT       = process.env.PORT         || 3000;
-const BROKER     = process.env.KAFKA_BROKER || 'localhost:9092';
-const KAFKA_USER = process.env.KAFKA_USER;
-const KAFKA_PASS = process.env.KAFKA_PASS;
-const TOPIC      = 'race-moves';
+const PORT     = process.env.PORT         || 3000;
+const BROKER   = process.env.KAFKA_BROKER || 'localhost:9092';
+const TOPIC    = 'race-moves';
+
+// Aiven Kafka uses SSL client-certificate (mTLS) auth. The certs are provided
+// as PEM strings in env vars (KAFKA_ACCESS_KEY / KAFKA_ACCESS_CERT / KAFKA_CA_CERT).
+// KAFKA_SECURITY_PROTOCOL is "SSL" for Aiven, "PLAINTEXT" for local docker Kafka.
+const SECURITY_PROTOCOL = process.env.KAFKA_SECURITY_PROTOCOL || 'PLAINTEXT';
+const KAFKA_ACCESS_KEY  = process.env.KAFKA_ACCESS_KEY;
+const KAFKA_ACCESS_CERT = process.env.KAFKA_ACCESS_CERT;
+const KAFKA_CA_CERT     = process.env.KAFKA_CA_CERT;
+const USE_SSL           = SECURITY_PROTOCOL.toUpperCase() === 'SSL';
+
+/**
+ * Aiven exposes cert values either inline (PEM string in the env var) or as a
+ * path to a .pem file. Accept both so it works locally and on the platform.
+ */
+function readPem(value) {
+  if (!value) return undefined;
+  const looksLikePem = value.includes('-----BEGIN');
+  if (looksLikePem) return value.replace(/\\n/g, '\n'); // un-escape newlines if flattened
+  return fs.readFileSync(value, 'utf8');                // otherwise treat as a file path
+}
 
 // ── game constants (mirrors game.html) ──────────────────────────────────────────
 const LANES = 3;
@@ -165,15 +183,18 @@ function startCountdown(room, roomId) {
 
 // ── main ────────────────────────────────────────────────────────────────────────
 async function main() {
-  // Kafka config — supports both local (no auth) and Aiven (SSL + SASL)
+  // Kafka config — supports both local (PLAINTEXT) and Aiven (SSL client certs / mTLS)
   const kafkaCfg = {
     clientId: 'crab-racing',
     brokers:  [BROKER],
     logLevel: 1, // WARN
   };
-  if (KAFKA_USER && KAFKA_PASS) {
-    kafkaCfg.ssl  = true;
-    kafkaCfg.sasl = { mechanism: 'scram-sha-256', username: KAFKA_USER, password: KAFKA_PASS };
+  if (USE_SSL) {
+    kafkaCfg.ssl = {
+      ca:   [readPem(KAFKA_CA_CERT)],   // Aiven CA that signed the broker cert
+      key:  readPem(KAFKA_ACCESS_KEY),  // this client's private key
+      cert: readPem(KAFKA_ACCESS_CERT), // this client's public cert
+    };
   }
   const kafka = new Kafka(kafkaCfg);
 
@@ -337,8 +358,8 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`\n🦀  Crab Racing\n    http://localhost:${PORT}  ← open in browser\n    ws://localhost:${PORT}   ← WebSocket\n`);
-    if (!KAFKA_USER) {
-      console.log('    (using local Kafka — set KAFKA_USER/KAFKA_PASS for Aiven)\n');
+    if (!USE_SSL) {
+      console.log('    (using local Kafka — set KAFKA_SECURITY_PROTOCOL=SSL + certs for Aiven)\n');
     }
   });
 }
