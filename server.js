@@ -47,7 +47,10 @@ function postLeaderboard(req, res) {
     const name     = String(body.name || 'Crab').slice(0, 20);
     const timeCs   = Number(body.timeCs);
     const colorIdx = Number(body.colorIdx) || 0;
-    await recordScore(name, timeCs, colorIdx);
+    // The obstacle seed the race was run on — kept so a board entry can be
+    // replayed on the identical track. May be absent from older clients.
+    const seed     = body.seed != null ? String(body.seed).slice(0, 32) : '';
+    await recordScore(name, timeCs, colorIdx, seed);
     sendJson(res, 200, await getLeaderboard());
   });
 }
@@ -110,6 +113,7 @@ function parseValkeyUri(uri) {
 }
 const LB_KEY      = 'leaderboard';        // sorted set: member = name, score = time (centiseconds)
 const LB_COLOR_KEY = 'leaderboard:colors'; // hash: name → crab colorIdx
+const LB_SEED_KEY  = 'leaderboard:seeds';  // hash: name → obstacle seed for that run
 const LB_MAX      = 10;                    // keep only the top N
 const LB_TTL_SECS = 60 * 60;               // ephemeral: whole board expires after 1h idle
 
@@ -209,8 +213,9 @@ function buildObstacles(seed) {
 let valkey = null;
 
 /** Record a finish. `timeCs` = race time in centiseconds (lower is better);
- *  `colorIdx` = which crab palette (0–3) the player raced as. */
-async function recordScore(name, timeCs, colorIdx) {
+ *  `colorIdx` = which crab palette (0–3) the player raced as;
+ *  `seed` = the obstacle seed the run was raced on (for replay). */
+async function recordScore(name, timeCs, colorIdx, seed = '') {
   if (valkey?.status !== 'ready' || !name || !Number.isFinite(timeCs)) return;
   try {
     // Keep the player's *best* time only: GT means "update only if greater",
@@ -218,26 +223,36 @@ async function recordScore(name, timeCs, colorIdx) {
     await valkey.zadd(LB_KEY, 'GT', -timeCs, name);
     // Remember the crab colour for this name so the board can render it.
     await valkey.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
+    // Remember the seed the run was raced on. Skip when unknown so we don't
+    // overwrite a real seed with an empty one from an older client.
+    if (seed) await valkey.hset(LB_SEED_KEY, name, seed);
     // Trim to the top LB_MAX (drop everything below rank LB_MAX).
     await valkey.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
     await valkey.expire(LB_KEY, LB_TTL_SECS);
     await valkey.expire(LB_COLOR_KEY, LB_TTL_SECS);
+    await valkey.expire(LB_SEED_KEY, LB_TTL_SECS);
   } catch (err) {
     console.error('[valkey] recordScore error:', err.message);
   }
 }
 
-/** Top scores, fastest first: [{ name, timeCs, colorIdx }, …]. */
+/** Top scores, fastest first: [{ name, timeCs, colorIdx, seed }, …]. */
 async function getLeaderboard() {
   if (valkey?.status !== 'ready') return [];
   try {
     // zrevrange … WITHSCORES returns a flat [member, score, member, score, …].
     const flat   = await valkey.zrevrange(LB_KEY, 0, LB_MAX - 1, 'WITHSCORES');
     const colors = await valkey.hgetall(LB_COLOR_KEY); // { name: "colorIdx" }
+    const seeds  = await valkey.hgetall(LB_SEED_KEY);  // { name: "seed" }
     const board = [];
     for (let i = 0; i < flat.length; i += 2) {
       const name = flat[i];
-      board.push({ name, timeCs: -Number(flat[i + 1]), colorIdx: Number(colors[name]) || 0 });
+      board.push({
+        name,
+        timeCs:   -Number(flat[i + 1]),
+        colorIdx: Number(colors[name]) || 0,
+        seed:     seeds[name] || '',
+      });
     }
     return board;
   } catch (err) {

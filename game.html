@@ -417,7 +417,9 @@ function renderLeaderboard(board) {
   if (empty) empty.style.display = 'none';
   list.innerHTML = board.map(row => {
     const hex = PALETTE_HEX[row.colorIdx] || PALETTE_HEX[0];
-    return `<li><span class="lb-swatch" style="background:${hex}"></span>` +
+    // Expose the seed as a hover title so a run can be replayed on the same track.
+    const seedTitle = row.seed ? ` title="seed: ${escapeHtml(row.seed)}"` : '';
+    return `<li${seedTitle}><span class="lb-swatch" style="background:${hex}"></span>` +
            `<span class="lb-name" style="color:${hex}">${escapeHtml(row.name)}</span>` +
            `<span class="lb-time">${fmtTime(row.timeCs)}</span></li>`;
   }).join('');
@@ -436,12 +438,13 @@ async function fetchLeaderboard() {
 }
 
 // Record a finish; returns the updated board (or null on failure).
-async function submitScore(name, timeCs, colorIdx) {
+// `seed` is the obstacle seed the race was run on, so the entry can be replayed.
+async function submitScore(name, timeCs, colorIdx, seed) {
   try {
     const res = await fetch(`${leaderboardBase()}/leaderboard`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, timeCs, colorIdx }),
+      body:    JSON.stringify({ name, timeCs, colorIdx, seed }),
     });
     if (res.ok) { const board = await res.json(); renderLeaderboard(board); return board; }
   } catch { /* offline — score just isn't recorded */ }
@@ -849,9 +852,9 @@ class RaceScene extends Phaser.Scene {
 
     const { width: W, height: H } = this.scale;
 
-    // Record the finish on the shared leaderboard (name + time + crab colour).
+    // Record the finish on the shared leaderboard (name + time + crab colour + seed).
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
-    submitScore(playerName, this.raceTime, myColorIdx);
+    submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '');
 
     if (multiMode) {
       this.add.rectangle(W/2, H/2, 240*RES, 80*RES, 0x0a1828, 230).setScrollFactor(0);

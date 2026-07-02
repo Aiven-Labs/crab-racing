@@ -10,3 +10,4 @@ certs/
 *.pem
 *.key
 *.cert
+fnox.toml
