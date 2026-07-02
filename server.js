@@ -16,6 +16,7 @@ const fs        = require('fs');
 const path      = require('path');
 const WebSocket = require('ws');
 const { Kafka } = require('kafkajs');
+const Valkey    = require('iovalkey');
 
 const MIME = {
   '.html': 'text/html',
@@ -25,7 +26,43 @@ const MIME = {
   '.ico':  'image/x-icon',
 };
 
+function sendJson(res, code, body) {
+  res.writeHead(code, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(JSON.stringify(body));
+}
+
+/** POST /leaderboard body: { name, timeCs } → records score, returns board. */
+function postLeaderboard(req, res) {
+  let raw = '';
+  req.on('data', chunk => {
+    raw += chunk;
+    if (raw.length > 1024) req.destroy(); // tiny payload — reject anything bigger
+  });
+  req.on('end', async () => {
+    let body;
+    try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+    const name     = String(body.name || 'Crab').slice(0, 20);
+    const timeCs   = Number(body.timeCs);
+    const colorIdx = Number(body.colorIdx) || 0;
+    await recordScore(name, timeCs, colorIdx);
+    sendJson(res, 200, await getLeaderboard());
+  });
+}
+
 function serveStatic(req, res) {
+  const route = req.url.split('?')[0];
+
+  // Leaderboard API — GET reads the board, POST records a finish.
+  // Used by both the lobby (home page) and the end screen, in solo and multi.
+  if (route === '/leaderboard') {
+    if (req.method === 'POST') { postLeaderboard(req, res); return; }
+    getLeaderboard().then(board => sendJson(res, 200, board));
+    return;
+  }
+
   // "/" → game.html, anything else → filename in project dir
   const urlPath = req.url === '/' ? '/game.html' : req.url.split('?')[0];
   const filePath = path.join(__dirname, urlPath);
@@ -48,6 +85,33 @@ function serveStatic(req, res) {
 const PORT     = process.env.PORT         || 3000;
 const BROKER   = process.env.KAFKA_BROKER || 'localhost:9092';
 const TOPIC    = 'race-moves';
+
+// Valkey (Redis-compatible) — ephemeral leaderboard store. Aiven for Valkey
+// gives you a single connection string; locally it's redis://valkey:6379.
+// Any of redis:// rediss:// valkey:// valkeys:// is accepted; the "s" variants
+// (rediss / valkeys) use TLS.
+//
+// Aiven's TLS cert is signed by a per-project CA that isn't in the system trust
+// store, so we hand iovalkey that CA explicitly. VALKEY_CA_CERT accepts either
+// the PEM text inline or a path to a .pem file (same as the Kafka certs below).
+const VALKEY_URI     = process.env.VALKEY_URI || 'redis://localhost:6379';
+const VALKEY_CA_CERT = process.env.VALKEY_CA_CERT;
+
+// Aiven hands out valkey:// / valkeys:// URIs; iovalkey (ioredis under the hood)
+// only speaks redis:// / rediss://. Normalise the scheme and report whether it's
+// a TLS URI (rediss / valkeys), so one connection string covers every form.
+function parseValkeyUri(uri) {
+  const m = /^(rediss?|valkeys?):\/\//i.exec(uri);
+  const scheme = (m?.[1] || 'redis').toLowerCase();
+  const tls = scheme === 'rediss' || scheme === 'valkeys';
+  // Rewrite valkey → redis so the client accepts it.
+  const url = uri.replace(/^valkeys?:\/\//i, tls ? 'rediss://' : 'redis://');
+  return { url, tls };
+}
+const LB_KEY      = 'leaderboard';        // sorted set: member = name, score = time (centiseconds)
+const LB_COLOR_KEY = 'leaderboard:colors'; // hash: name → crab colorIdx
+const LB_MAX      = 10;                    // keep only the top N
+const LB_TTL_SECS = 60 * 60;               // ephemeral: whole board expires after 1h idle
 
 // Aiven Kafka uses SSL client-certificate (mTLS) auth. The certs are provided
 // as PEM strings in env vars (KAFKA_ACCESS_KEY / KAFKA_ACCESS_CERT / KAFKA_CA_CERT).
@@ -137,6 +201,49 @@ function buildObstacles(seed) {
   });
   const map = new Map(obstacles.map(o => [`${o.cell},${o.lane}`, o]));
   return { obstacles, map };
+}
+
+// ── Valkey leaderboard ────────────────────────────────────────────────────────
+// One redis client, connected in main(). If Valkey is unreachable the game still
+// works — the leaderboard just silently no-ops rather than taking the server down.
+let valkey = null;
+
+/** Record a finish. `timeCs` = race time in centiseconds (lower is better);
+ *  `colorIdx` = which crab palette (0–3) the player raced as. */
+async function recordScore(name, timeCs, colorIdx) {
+  if (valkey?.status !== 'ready' || !name || !Number.isFinite(timeCs)) return;
+  try {
+    // Keep the player's *best* time only: GT means "update only if greater",
+    // so we store the negated time and a fastest run wins the highest score.
+    await valkey.zadd(LB_KEY, 'GT', -timeCs, name);
+    // Remember the crab colour for this name so the board can render it.
+    await valkey.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
+    // Trim to the top LB_MAX (drop everything below rank LB_MAX).
+    await valkey.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
+    await valkey.expire(LB_KEY, LB_TTL_SECS);
+    await valkey.expire(LB_COLOR_KEY, LB_TTL_SECS);
+  } catch (err) {
+    console.error('[valkey] recordScore error:', err.message);
+  }
+}
+
+/** Top scores, fastest first: [{ name, timeCs, colorIdx }, …]. */
+async function getLeaderboard() {
+  if (valkey?.status !== 'ready') return [];
+  try {
+    // zrevrange … WITHSCORES returns a flat [member, score, member, score, …].
+    const flat   = await valkey.zrevrange(LB_KEY, 0, LB_MAX - 1, 'WITHSCORES');
+    const colors = await valkey.hgetall(LB_COLOR_KEY); // { name: "colorIdx" }
+    const board = [];
+    for (let i = 0; i < flat.length; i += 2) {
+      const name = flat[i];
+      board.push({ name, timeCs: -Number(flat[i + 1]), colorIdx: Number(colors[name]) || 0 });
+    }
+    return board;
+  } catch (err) {
+    console.error('[valkey] getLeaderboard error:', err.message);
+    return [];
+  }
 }
 
 // ── server state ────────────────────────────────────────────────────────────────
@@ -242,6 +349,26 @@ async function main() {
     };
   }
   const kafka = new Kafka(kafkaCfg);
+
+  // Valkey — connect via the single connection string. rediss:// URIs turn on
+  // TLS automatically (that's what Aiven for Valkey hands you). lazyConnect lets
+  // us await the first connection and treat failure as "leaderboard disabled"
+  // rather than crashing the server.
+  const { url: valkeyUrl, tls } = parseValkeyUri(VALKEY_URI);
+  const valkeyOpts = { lazyConnect: true, maxRetriesPerRequest: 1 };
+  if (tls) {
+    // Supply Aiven's project CA so the broker cert verifies. Without it Node
+    // rejects the connection with a self-signed-cert / unknown-CA error.
+    valkeyOpts.tls = VALKEY_CA_CERT ? { ca: [readPem(VALKEY_CA_CERT)] } : {};
+  }
+  valkey = new Valkey(valkeyUrl, valkeyOpts);
+  valkey.on('error', err => console.error('[valkey] client error:', err.message));
+  try {
+    await valkey.connect();
+    console.log(`✓ Valkey connected (${valkeyUrl.split('@').pop()}${tls ? ', TLS' : ''})`);
+  } catch (err) {
+    console.error('[valkey] connect failed — leaderboard disabled:', err.message);
+  }
 
   // Ensure topic exists
   const admin = kafka.admin();
