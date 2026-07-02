@@ -45,6 +45,25 @@
   .lrow { display: flex; gap: 6px; }
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
+
+  /* ── Leaderboard ───────────────────────────────────── */
+  #leaderboard { font-family: monospace; color: #c0d8f0; }
+  #leaderboard h2 {
+    font-size: 13px; color: #e8d030; letter-spacing: 2px;
+    margin-bottom: 6px; text-transform: uppercase;
+  }
+  #lb-list { list-style: none; font-size: 13px; }
+  #lb-list li {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 3px 4px; border-bottom: 1px solid #16283c;
+  }
+  #lb-list .lb-swatch {
+    flex: 0 0 auto; width: 10px; height: 10px; border-radius: 2px;
+    align-self: center; border: 1px solid #0006;
+  }
+  #lb-list .lb-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #lb-list .lb-time { flex: 0 0 auto; color: #7ec8e3; font-variant-numeric: tabular-nums; }
+  #lb-empty { font-size: 12px; color: #567; }
 </style>
 </head>
 <body>
@@ -67,6 +86,12 @@
     </div>
     <div id="lobby-status">Enter a name &amp; room, then Join</div>
     <div id="player-list"></div>
+    <hr>
+    <div id="leaderboard">
+      <h2>🏆 Fastest Crabs</h2>
+      <ol id="lb-list"></ol>
+      <div id="lb-empty">No times yet — be the first!</div>
+    </div>
   </div>
 </div>
 
@@ -361,6 +386,68 @@ function handleServerMsg(msg) {
   }
 }
 
+// ─── leaderboard (HTTP; works in solo + multi) ────────────────────────────────
+// The board lives on the server behind /leaderboard. Derive its HTTP origin from
+// the WebSocket URL field so one input drives both (ws→http, wss→https).
+function leaderboardBase() {
+  const raw = $id('ws-url').value.trim() || location.origin;
+  try {
+    const u = new URL(raw);
+    if (u.protocol === 'ws:')  u.protocol = 'http:';
+    if (u.protocol === 'wss:') u.protocol = 'https:';
+    return u.origin;
+  } catch { return location.origin; }
+}
+
+// centiseconds → "m:ss.cc"
+function fmtTime(cs) {
+  const c = cs % 100, sec = Math.floor(cs / 100), m = Math.floor(sec / 60), s = sec % 60;
+  return `${m}:${s.toString().padStart(2,'0')}.${c.toString().padStart(2,'0')}`;
+}
+
+function renderLeaderboard(board) {
+  const list  = $id('lb-list');
+  const empty = $id('lb-empty');
+  if (!list) return;
+  if (!board || board.length === 0) {
+    list.innerHTML = '';
+    if (empty) empty.style.display = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  list.innerHTML = board.map(row => {
+    const hex = PALETTE_HEX[row.colorIdx] || PALETTE_HEX[0];
+    return `<li><span class="lb-swatch" style="background:${hex}"></span>` +
+           `<span class="lb-name" style="color:${hex}">${escapeHtml(row.name)}</span>` +
+           `<span class="lb-time">${fmtTime(row.timeCs)}</span></li>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+async function fetchLeaderboard() {
+  try {
+    const res = await fetch(`${leaderboardBase()}/leaderboard`);
+    if (res.ok) renderLeaderboard(await res.json());
+  } catch { /* server may be down — leave the board as-is */ }
+}
+
+// Record a finish; returns the updated board (or null on failure).
+async function submitScore(name, timeCs, colorIdx) {
+  try {
+    const res = await fetch(`${leaderboardBase()}/leaderboard`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name, timeCs, colorIdx }),
+    });
+    if (res.ok) { const board = await res.json(); renderLeaderboard(board); return board; }
+  } catch { /* offline — score just isn't recorded */ }
+  return null;
+}
+
 // Read the seed input: blank → random seed, otherwise the custom string.
 function readSeedInput() {
   const raw = $id('seed-code').value.trim();
@@ -403,6 +490,11 @@ function startGame(isMulti) {
 
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
+
+// Show the leaderboard on the home page right away, and refresh it whenever the
+// server field changes (so it points at whichever server you'll actually play on).
+fetchLeaderboard();
+$id('ws-url').addEventListener('change', fetchLeaderboard);
 
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
 class RaceScene extends Phaser.Scene {
@@ -756,6 +848,10 @@ class RaceScene extends Phaser.Scene {
     if (this.timerEvent) this.timerEvent.remove();
 
     const { width: W, height: H } = this.scale;
+
+    // Record the finish on the shared leaderboard (name + time + crab colour).
+    const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
+    submitScore(playerName, this.raceTime, myColorIdx);
 
     if (multiMode) {
       this.add.rectangle(W/2, H/2, 240*RES, 80*RES, 0x0a1828, 230).setScrollFactor(0);
