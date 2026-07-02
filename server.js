@@ -58,6 +58,14 @@ function postLeaderboard(req, res) {
 function serveStatic(req, res) {
   const route = req.url.split('?')[0];
 
+  // Client config — the browser fetches this on load to learn the WebSocket URL.
+  // Empty unless PUBLIC_WS_URL is set; when empty the client defaults to the
+  // origin that served the page, so no config is needed for same-host deploys.
+  if (route === '/config') {
+    sendJson(res, 200, { wsUrl: PUBLIC_WS_URL });
+    return;
+  }
+
   // Leaderboard API — GET reads the board, POST records a finish.
   // Used by both the lobby (home page) and the end screen, in solo and multi.
   if (route === '/leaderboard') {
@@ -88,6 +96,12 @@ function serveStatic(req, res) {
 const PORT     = process.env.PORT         || 3000;
 const BROKER   = process.env.KAFKA_BROKER || 'localhost:9092';
 const TOPIC    = 'race-moves';
+
+// Optional public WebSocket URL handed to the browser via GET /config. Leave
+// unset for same-host deploys (the client falls back to the page's own origin);
+// set it only when the WS server is reached at a different host than the static
+// files, e.g. PUBLIC_WS_URL=wss://your-service-3000.aiven.app
+const PUBLIC_WS_URL = process.env.PUBLIC_WS_URL || '';
 
 // Valkey (Redis-compatible) — ephemeral leaderboard store. Aiven for Valkey
 // gives you a single connection string; locally it's redis://valkey:6379.

@@ -20,6 +20,16 @@
     z-index: 10; font-family: monospace; color: #c0d8f0;
   }
   #lobby.hidden { display: none; }
+
+  /* ── Home button (over the game canvas) ────────────── */
+  #btn-home {
+    position: fixed; top: 10px; left: 10px; z-index: 20;
+    background: #111e30; border: 2px solid #2a5070; color: #a0c8e8;
+    font-family: monospace; font-size: 14px; padding: 6px 12px;
+    cursor: pointer; letter-spacing: 1px;
+  }
+  #btn-home:hover { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
+  #btn-home.hidden { display: none; }
   #lobby-inner {
     display: flex; flex-direction: column; gap: 12px;
     max-width: 340px; width: 90%; text-align: center;
@@ -68,6 +78,10 @@
 </head>
 <body>
 
+<!-- Persistent "home" button — shown only while a race is on screen, so the
+     player can always bail back to the lobby (and its leaderboard). -->
+<button id="btn-home" class="hidden" title="Back to lobby">🏠 Home</button>
+
 <!-- ── Lobby ─────────────────────────────────────────── -->
 <div id="lobby">
   <div id="lobby-inner">
@@ -80,7 +94,7 @@
       <input id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
       <input id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
       <div class="lrow">
-        <input id="ws-url" placeholder="Server" value="wss://019f1e27-36cc-7ce0-9389-8428b196d1e7-3000.eur-1.aiven.app">
+        <input id="ws-url" placeholder="Server (blank = this site)">
         <button id="btn-multi">Join</button>
       </div>
     </div>
@@ -390,13 +404,40 @@ function handleServerMsg(msg) {
 // The board lives on the server behind /leaderboard. Derive its HTTP origin from
 // the WebSocket URL field so one input drives both (ws→http, wss→https).
 function leaderboardBase() {
-  const raw = $id('ws-url').value.trim() || location.origin;
+  const raw = $id('ws-url').value.trim() || defaultWsUrl();
   try {
     const u = new URL(raw);
     if (u.protocol === 'ws:')  u.protocol = 'http:';
     if (u.protocol === 'wss:') u.protocol = 'https:';
     return u.origin;
   } catch { return location.origin; }
+}
+
+// The WebSocket URL is NOT hardcoded. By default it points back at whatever
+// origin served this page (server.js serves game.html itself), so a deploy
+// needs zero client config. A server may override it by exposing PUBLIC_WS_URL
+// via GET /config — useful when the WS server lives on a different host than
+// the static files. Set once at load by loadServerConfig().
+let configWsUrl = '';
+function defaultWsUrl() {
+  if (configWsUrl) return configWsUrl;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // file:// or otherwise origin-less → fall back to a local dev server.
+  if (!location.host) return 'ws://localhost:3000';
+  return `${proto}//${location.host}`;
+}
+
+// Ask the server for an optional PUBLIC_WS_URL override, then seed the (empty)
+// input's placeholder-backed default and refresh the board. Silent on failure —
+// the same-origin default already works.
+async function loadServerConfig() {
+  try {
+    const res = await fetch('/config');
+    if (res.ok) {
+      const cfg = await res.json();
+      if (cfg && cfg.wsUrl) configWsUrl = String(cfg.wsUrl);
+    }
+  } catch { /* no /config — same-origin default stands */ }
 }
 
 // centiseconds → "m:ss.cc"
@@ -464,7 +505,7 @@ function startSolo() {
 }
 
 function joinMulti() {
-  const wsUrl  = $id('ws-url').value.trim()     || 'ws://localhost:3000';
+  const wsUrl  = $id('ws-url').value.trim()     || defaultWsUrl();
   const name   = $id('player-name').value.trim() || 'Crab';
   const roomId = $id('room-code').value.trim()   || 'room1';
   const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
@@ -479,6 +520,7 @@ function joinMulti() {
 
 function startGame(isMulti) {
   multiMode = isMulti;
+  $id('btn-home').classList.remove('hidden');
   if (window._phaserGame) return; // guard against double-init
   window._phaserGame = new Phaser.Game({
     type:            Phaser.AUTO,
@@ -491,12 +533,31 @@ function startGame(isMulti) {
   });
 }
 
+// Tear down the current race and return to the lobby. Fully destroys the Phaser
+// game (so the next race starts clean past startGame's double-init guard) and
+// closes any multiplayer socket. Refreshes the board — the finish just recorded
+// shows up here, since the leaderboard lives on the lobby screen.
+function goHome() {
+  if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
+  gameScene = null;
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  myPlayerId = null;
+  multiMode  = false;
+  $id('btn-home').classList.add('hidden');
+  $id('lobby').classList.remove('hidden');
+  setStatus('Enter a name & room, then Join');
+  $id('player-list').innerHTML = '';
+  fetchLeaderboard();
+}
+
+$id('btn-home').onclick = goHome;
+
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
 
 // Show the leaderboard on the home page right away, and refresh it whenever the
 // server field changes (so it points at whichever server you'll actually play on).
-fetchLeaderboard();
+loadServerConfig().then(fetchLeaderboard);
 $id('ws-url').addEventListener('change', fetchLeaderboard);
 
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
@@ -862,7 +923,7 @@ class RaceScene extends Phaser.Scene {
         fontFamily: 'monospace', fontSize: fs(20),
         color: '#e8e030', stroke: '#000', strokeThickness: 4,
       }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 16*RES, 'refresh to race again', {
+      this.add.text(W/2, H/2 + 16*RES, 'tap 🏠 Home for the leaderboard', {
         fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
         stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
@@ -881,7 +942,7 @@ class RaceScene extends Phaser.Scene {
         fontFamily: 'monospace', fontSize: fs(13),
         color: '#ffffff', stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again', {
+      this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 for leaderboard', {
         fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
         stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5).setScrollFactor(0);
@@ -903,7 +964,7 @@ class RaceScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: fs(18),
       color: '#e05050', stroke: '#000', strokeThickness: 4,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 16*RES, 'refresh to race again', {
+    this.add.text(W/2, H/2 + 16*RES, 'tap 🏠 Home for the leaderboard', {
       fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
