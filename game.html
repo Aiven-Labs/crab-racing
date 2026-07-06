@@ -56,6 +56,22 @@
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
 
+  /* ── Track settings (per-lobby) ────────────────────── */
+  #track-settings { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
+  #track-settings > summary {
+    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
+    padding: 8px 0; list-style: none; user-select: none;
+  }
+  #track-settings > summary::before { content: '⚙ '; }
+  #track-settings[open] > summary { color: #a0c8e8; }
+  #track-settings .ts-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
+  #track-settings label { font-size: 13px; color: #7ea8c8; }
+  .ts-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ts-field input { width: 90px !important; }
+  #cfg-obstacles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  #cfg-obstacles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #cfg-obstacles input { width: auto !important; }
+
   /* ── Leaderboard ───────────────────────────────────── */
   #leaderboard { font-family: monospace; color: #c0d8f0; }
   #leaderboard h2 {
@@ -136,6 +152,23 @@
     <div class="sub">COASTAL SURVIVAL RACE</div>
     <button id="btn-help">❓ How to Play</button>
     <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+    <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
+         Join (the room creator's settings fix the room, later joiners inherit). -->
+    <details id="track-settings">
+      <summary>Track settings</summary>
+      <div class="ts-body">
+        <div class="ts-field">
+          <label for="cfg-lanes">Lanes</label>
+          <input id="cfg-lanes" type="number" min="1" max="12" placeholder="3">
+        </div>
+        <div class="ts-field">
+          <label for="cfg-length">Track length</label>
+          <input id="cfg-length" type="number" min="10" max="200" placeholder="46">
+        </div>
+        <label>Obstacles</label>
+        <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+      </div>
+    </details>
     <button id="btn-solo">Solo Race</button>
     <hr>
     <div id="multi-section">
@@ -338,14 +371,23 @@ function drawNet(ctx) {
 // simulates the exact same track. Solo races seed from the lobby (custom or random).
 //
 // IMPORTANT: this generator must stay byte-for-byte identical to the one in
-// server.js — the same seed must produce the same obstacles on both sides.
-const OBSTACLE_KINDS = [
+// server.js — the same seed + config must produce the same obstacles on both sides.
+//
+// The track (lanes, zones, obstacle density and this kinds table) is defined in
+// game-config.json, which the client fetches on load; applyGameConfig() overwrites
+// the values below once it arrives. The literals here are the fallback used when
+// the page is opened straight off the filesystem (no server / no config file).
+let OBSTACLE_KINDS = [
   { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
   { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
   { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
   { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
   { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
 ];
+
+// Obstacle placement tunables — overwritten by applyGameConfig() from the server.
+let OBSTACLE_DENSITY    = 0.38;
+let OBSTACLE_START_CELL = 6;
 
 // xmur3 string hash → 32-bit int (lets custom seeds be arbitrary strings)
 function hashSeed(str) {
@@ -393,14 +435,15 @@ let raceSeed  = null;
 function buildObstacles(seed) {
   raceSeed  = seed;
   OBSTACLES = generateObstacles(seed, {
-    totalCells: TOTAL_CELLS, lanes: LANES, startCell: 6, finishCell: FINISH_CELL,
+    totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
+    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY,
   });
   OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
 }
 
 // ─── track ────────────────────────────────────────────────────────────────────
 const CELL  = 32;   // texture cell size in source pixels
-const LANES = 3;
+let   LANES = 3;    // overwritten by applyGameConfig() from the server
 
 // ─── render resolution ──────────────────────────────────────────────────────────
 // The game world is laid out in a 480×270 logical space, but we render into a
@@ -413,7 +456,10 @@ const RES    = Math.max(2, Math.min(4,
 ));
 const CELLR  = CELL * RES;              // on-screen cell size
 const fs     = (n) => `${Math.round(n * RES)}px`;   // logical font size → device px
-const ZONES = [
+// Track layout — also overwritten by applyGameConfig() from the server. The
+// literals here are the filesystem fallback; TRACK / TOTAL_CELLS / FINISH_CELL
+// are derived from ZONES and recomputed by rebuildTrack().
+let ZONES = [
   { tile: 'shore',       len: 5  },
   { tile: 'wetSand',     len: 8  },
   { tile: 'drySand',     len: 12 },
@@ -421,10 +467,137 @@ const ZONES = [
   { tile: 'treeline',    len: 8  },
   { tile: 'finish',      len: 3  },
 ];
-const TRACK       = [];
-for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
-const TOTAL_CELLS = TRACK.length;
-const FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
+let TRACK       = [];
+let TOTAL_CELLS = 0;
+let FINISH_CELL = 0;
+
+// Derive TRACK / TOTAL_CELLS / FINISH_CELL from the current ZONES.
+function rebuildTrack() {
+  TRACK = [];
+  for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
+  TOTAL_CELLS = TRACK.length;
+  FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
+}
+rebuildTrack();
+
+// Apply a game config object (the parsed game-config.json). Overwrites the track
+// tunables and rebuilds the derived track. Any missing key keeps its current
+// (default) value, so a partial config is safe.
+function applyGameConfig(game) {
+  if (!game) return;
+  if (Number.isFinite(game.lanes))             LANES = game.lanes;
+  if (Number.isFinite(game.obstacleDensity))   OBSTACLE_DENSITY = game.obstacleDensity;
+  if (Number.isFinite(game.obstacleStartCell)) OBSTACLE_START_CELL = game.obstacleStartCell;
+  if (Array.isArray(game.zones) && game.zones.length)         ZONES = game.zones;
+  if (Array.isArray(game.obstacleKinds) && game.obstacleKinds.length) OBSTACLE_KINDS = game.obstacleKinds;
+  rebuildTrack();
+}
+
+// ─── per-lobby track settings ───────────────────────────────────────────────────
+// The lobby lets a player customise the track (lanes / length / which obstacle
+// kinds). In multiplayer the server is authoritative and clamps these; solo runs
+// apply them locally. Bounds + scaleZones mirror server.js so both agree.
+const LANE_MIN = 1,  LANE_MAX = 12;
+const LEN_MIN  = 10, LEN_MAX  = 200;
+
+// Scale a base zone list's lengths proportionally to hit `targetLen` total cells.
+// Keep byte-for-byte identical to server.js's scaleZones.
+function scaleZones(baseZones, targetLen) {
+  const baseTotal = baseZones.reduce((s, z) => s + z.len, 0);
+  const scaled = baseZones.map(z => ({
+    ...z, len: Math.max(1, Math.round(z.len * targetLen / baseTotal)),
+  }));
+  const drift = targetLen - scaled.reduce((s, z) => s + z.len, 0);
+  if (drift !== 0) {
+    let bi = 0;
+    for (let i = 1; i < scaled.length; i++) if (scaled[i].len > scaled[bi].len) bi = i;
+    scaled[bi].len = Math.max(1, scaled[bi].len + drift);
+  }
+  return scaled;
+}
+
+// Baselines kept so lobby edits always scale/filter from the full defaults rather
+// than an already-narrowed set: ALL_OBSTACLE_KINDS lets a lobby re-enable a kind
+// it unchecked; ALL_OBSTACLE_ZONES is the unscaled zone list scaleZones() works
+// from. Snapshotted from the defaults on load.
+let ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
+let ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
+
+// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleKinds? }
+// omitting any field left at its default (blank number, all boxes checked) so that
+// "untouched" means "inherit the server/default config".
+function readLobbyConfig() {
+  const cfg = {};
+  const lanesRaw = $id('cfg-lanes').value.trim();
+  if (lanesRaw !== '') cfg.lanes = Number(lanesRaw);
+  const lenRaw = $id('cfg-length').value.trim();
+  if (lenRaw !== '') cfg.trackLength = Number(lenRaw);
+  const checked = ALL_OBSTACLE_KINDS
+    .filter(k => { const box = $id('cfg-ob-' + k.type); return box && box.checked; })
+    .map(k => k.type);
+  if (checked.length && checked.length < ALL_OBSTACLE_KINDS.length) cfg.obstacleKinds = checked;
+  return cfg;
+}
+
+// Build the obstacle on/off checkboxes from the current default kinds. Preserves
+// the user's existing checked state across rebuilds (a kind already on screen keeps
+// its box; a newly-appearing kind defaults to checked), so a late config-load
+// refresh never clobbers a selection the player already made.
+function buildObstacleToggles() {
+  const box = $id('cfg-obstacles');
+  if (!box) return;
+  const labels = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
+  const prev = {};
+  box.querySelectorAll('input[type=checkbox]').forEach(b => {
+    prev[b.id.replace(/^cfg-ob-/, '')] = b.checked;
+  });
+  box.innerHTML = ALL_OBSTACLE_KINDS.map(k => {
+    const on = prev[k.type] !== false; // unknown → default checked
+    return `<label><input type="checkbox" id="cfg-ob-${k.type}"${on ? ' checked' : ''}>` +
+           `${labels[k.type] || k.type}</label>`;
+  }).join('');
+}
+
+// Sync the lanes/length input placeholders to the current default track, so a
+// blank field honestly shows the value it will inherit (which the deployed
+// game-config.json may have changed from the baked-in 3 / 46).
+function syncLobbyPlaceholders() {
+  const lanes = $id('cfg-lanes'), len = $id('cfg-length');
+  if (lanes) lanes.placeholder = String(LANES);
+  if (len)   len.placeholder   = String(TOTAL_CELLS);
+}
+
+// Refresh the baselines the lobby scales/filters from. Call at init (from the
+// baked-in defaults) AND after the load-time game-config.json fetch, so solo
+// customisation starts from whatever default ended up loaded. NOT called for
+// per-room configs from joined/go — those are already the room's final track.
+function refreshLobbyBaselines() {
+  ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
+  ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
+  buildObstacleToggles();
+  syncLobbyPlaceholders();
+}
+// Build the toggles immediately (DOM is ready — this script is at end of body) so
+// the settings panel is fully usable before the async config fetch resolves.
+refreshLobbyBaselines();
+
+// Apply lobby overrides to the local track (solo races). Clamps + scales exactly
+// like the server so a solo track matches what a multiplayer room would build.
+function applyLobbyConfig(cfg) {
+  if (Number.isFinite(cfg.lanes)) {
+    LANES = Math.max(LANE_MIN, Math.min(LANE_MAX, Math.round(cfg.lanes)));
+  }
+  if (Number.isFinite(cfg.trackLength)) {
+    const len = Math.max(LEN_MIN, Math.min(LEN_MAX, Math.round(cfg.trackLength)));
+    ZONES = scaleZones(ALL_OBSTACLE_ZONES, len);
+  }
+  if (Array.isArray(cfg.obstacleKinds) && cfg.obstacleKinds.length) {
+    const allow = new Set(cfg.obstacleKinds);
+    const filtered = ALL_OBSTACLE_KINDS.filter(k => allow.has(k.type));
+    if (filtered.length) OBSTACLE_KINDS = filtered;
+  }
+  rebuildTrack();
+}
 
 // ─── lobby / WebSocket ────────────────────────────────────────────────────────
 function $id(id) { return document.getElementById(id); }
@@ -440,6 +613,9 @@ function handleServerMsg(msg) {
     case 'joined':
       myPlayerId = msg.playerId;
       myColorIdx = msg.colorIdx;
+      // Apply the room's track config (lanes / zones / obstacle kinds) BEFORE
+      // building obstacles so the client matches the server's authoritative track.
+      if (msg.config) applyGameConfig(msg.config);
       if (msg.seed != null) buildObstacles(msg.seed);
       setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
@@ -453,6 +629,7 @@ function handleServerMsg(msg) {
       break;
     case 'go':
       multiPlayers = msg.players;
+      if (msg.config) applyGameConfig(msg.config); // authoritative track config
       if (msg.seed != null) buildObstacles(msg.seed); // authoritative seed for the race
       $id('lobby').classList.add('hidden');
       startGame(true);
@@ -513,6 +690,18 @@ async function loadServerConfig() {
       if (cfg && cfg.wsUrl) configWsUrl = String(cfg.wsUrl);
     }
   } catch { /* no /config — same-origin default stands */ }
+  // Track config (lanes / zones / obstacles) is a separate static file so it works
+  // whether the page is served by the node server or a plain static host (e.g. the
+  // nginx container). Loaded from the same origin as the page; both the client and
+  // the node server read the identical game-config.json, so they simulate the same
+  // track. Silent on failure (e.g. file://) — the baked-in defaults stand.
+  try {
+    const res = await fetch('game-config.json');
+    if (res.ok) applyGameConfig(await res.json());
+  } catch { /* no server / no file — defaults stand */ }
+  // Seed the lobby's track-settings baselines + checkboxes from whatever the
+  // default config ended up being (deployed file or baked-in fallback).
+  refreshLobbyBaselines();
 }
 
 // centiseconds → "m:ss.cc"
@@ -574,6 +763,7 @@ function readSeedInput() {
 }
 
 function startSolo() {
+  applyLobbyConfig(readLobbyConfig());   // custom lanes / length / obstacles
   buildObstacles(readSeedInput());
   $id('lobby').classList.add('hidden');
   startGame(false);
@@ -584,10 +774,11 @@ function joinMulti() {
   const name   = $id('player-name').value.trim() || 'Crab';
   const roomId = $id('room-code').value.trim()   || 'room1';
   const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
+  const config = readLobbyConfig(); // room creator's track settings; ignored for existing rooms
   setStatus('Connecting…');
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
-  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed }));
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed, config }));
   ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
   ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
@@ -709,7 +900,15 @@ class RaceScene extends Phaser.Scene {
 
     // ── scene state ────────────────────────────────────────────
     const { width: W, height: H } = this.scale;
-    const trackTop = Math.floor((H - LANES * CELLR) / 2);
+    // Centre the track when it fits the viewport; when there are more lanes than
+    // fit vertically, top-align it (trackTop 0) so no lane starts off-screen and
+    // the camera can scroll down through the rest.
+    const trackH   = LANES * CELLR;
+    const trackTop = Math.max(0, Math.floor((H - trackH) / 2));
+    // World is as tall as the track (or the viewport, whichever is larger) so the
+    // camera has room to follow the crab vertically past the viewport edge.
+    const worldH   = Math.max(H, trackTop + trackH);
+    this.worldH       = worldH;
     this.trackTop     = trackTop;
     this.busy         = false;
     this.won          = false;
@@ -745,9 +944,15 @@ class RaceScene extends Phaser.Scene {
       this._setupSoloCrab(trackTop);
     }
 
-    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELLR, H);
-    this.cameras.main.startFollow(this.crab, true, 0.1, 1);
-    this.cameras.main.setDeadzone(60 * RES, H);
+    // Bounds span the full world (track can be taller than the viewport when
+    // there are many lanes), so the camera can follow the crab in both axes.
+    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELLR, worldH);
+    this.cameras.main.startFollow(this.crab, true, 0.1, 0.1);
+    // Horizontal deadzone (60px band) lets the crab move a little before the view
+    // pans sideways. Zero height means the camera always keeps the crab centred
+    // vertically — which does nothing while the track fits the viewport (bounds
+    // clamp it), and scrolls to follow the crab once there are more lanes than fit.
+    this.cameras.main.setDeadzone(60 * RES, 0);
 
     // ── HUD ────────────────────────────────────────────────────
     this.hudText = this.add.text(8 * RES, 8 * RES, '', {

@@ -1,0 +1,25 @@
+{
+  "_comment": "Example track config. Copy this to game-config.json and edit to tune a custom game — no code changes needed. server.js loads game-config.json at startup and the browser fetches the same file on load, so client and server always derive the identical track (essential for multiplayer). If game-config.json is absent, both fall back to the defaults baked into the code (which match this file). Opening game.html straight off the filesystem (file://) can't fetch it and always uses the baked-in defaults.",
+
+  "lanes": 3,
+
+  "obstacleDensity": 0.38,
+  "obstacleStartCell": 6,
+
+  "zones": [
+    { "tile": "shore",       "len": 5  },
+    { "tile": "wetSand",     "len": 8  },
+    { "tile": "drySand",     "len": 12 },
+    { "tile": "undergrowth", "len": 10 },
+    { "tile": "treeline",    "len": 8  },
+    { "tile": "finish",      "len": 3  }
+  ],
+
+  "obstacleKinds": [
+    { "type": "hole",  "effect": "stun",  "turns": 2, "msg": "FELL IN A HOLE!"     },
+    { "type": "jelly", "effect": "stun",  "turns": 1, "msg": "STUNG!"              },
+    { "type": "rock",  "effect": "block",             "msg": "BLOCKED BY ROCK!"    },
+    { "type": "beach", "effect": "push",              "msg": "TOURIST KICKED YOU!" },
+    { "type": "net",   "effect": "stun",  "turns": 1, "msg": "TANGLED IN A NET!"   }
+  ]
+}
