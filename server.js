@@ -21,6 +21,7 @@ const Valkey    = require('iovalkey');
 const MIME = {
   '.html': 'text/html',
   '.js':   'text/javascript',
+  '.json': 'application/json',
   '.css':  'text/css',
   '.png':  'image/png',
   '.ico':  'image/x-icon',
@@ -151,13 +152,56 @@ function readPem(value) {
   return fs.readFileSync(value, 'utf8');                // otherwise treat as a file path
 }
 
-// ── game constants (mirrors game.html) ──────────────────────────────────────────
-const LANES = 3;
-const ZONES = [
-  { len: 5 }, { len: 8 }, { len: 12 }, { len: 10 }, { len: 8 }, { len: 3 },
-];
-const TOTAL_CELLS = ZONES.reduce((s, z) => s + z.len, 0); // 46
-const FINISH_CELL = TOTAL_CELLS - 3;                        // 43
+// ── game config (single source of truth: game-config.json) ─────────────────────
+// The track — lane count, zones, obstacle density and the obstacle kinds table —
+// lives in game-config.json so a custom game can be tuned without touching code.
+// The server loads it at startup and derives its constants from it; the browser
+// fetches the same file (it's served as a static asset), so the client and server
+// always simulate the byte-for-byte identical track.
+//
+// These defaults are the fallback if game-config.json is missing or unreadable;
+// they must stay in sync with the values shipped in game-config.json / game.html.
+const DEFAULT_GAME_CONFIG = {
+  lanes: 3,
+  obstacleDensity: 0.38,
+  obstacleStartCell: 6,
+  zones: [
+    { tile: 'shore',       len: 5  },
+    { tile: 'wetSand',     len: 8  },
+    { tile: 'drySand',     len: 12 },
+    { tile: 'undergrowth', len: 10 },
+    { tile: 'treeline',    len: 8  },
+    { tile: 'finish',      len: 3  },
+  ],
+  obstacleKinds: [
+    { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
+    { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+    { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
+    { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
+    { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
+  ],
+};
+
+/** Load game-config.json, falling back to the built-in defaults on any problem.
+ *  Missing keys fall back individually, so a partial config file is fine. */
+function loadGameConfig() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'game-config.json'), 'utf8');
+    const cfg = JSON.parse(raw);
+    return { ...DEFAULT_GAME_CONFIG, ...cfg };
+  } catch (err) {
+    console.warn('[config] using defaults — could not load game-config.json:', err.message);
+    return DEFAULT_GAME_CONFIG;
+  }
+}
+
+const GAME_CONFIG = loadGameConfig();
+
+const LANES         = GAME_CONFIG.lanes;
+const ZONES         = GAME_CONFIG.zones;
+const OBSTACLE_KINDS = GAME_CONFIG.obstacleKinds;
+const TOTAL_CELLS   = ZONES.reduce((s, z) => s + z.len, 0);
+const FINISH_CELL   = TOTAL_CELLS - ZONES[ZONES.length - 1].len;
 
 // Obstacles are placed procedurally from a per-room seed so every race gets a
 // fresh but fair layout. This server is authoritative: it picks the seed (or
@@ -165,14 +209,7 @@ const FINISH_CELL = TOTAL_CELLS - 3;                        // 43
 // they render/simulate the identical track.
 //
 // IMPORTANT: keep this generator byte-for-byte identical to the one in game.html
-// — the same seed must produce the same obstacles on both sides.
-const OBSTACLE_KINDS = [
-  { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
-  { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
-  { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
-  { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
-];
+// — the same seed + config must produce the same obstacles on both sides.
 
 // xmur3 string hash → 32-bit int (lets custom seeds be arbitrary strings)
 function hashSeed(str) {
@@ -215,7 +252,8 @@ function generateObstacles(seed, opts) {
 /** Build the obstacle list + lookup map for a given seed. */
 function buildObstacles(seed) {
   const obstacles = generateObstacles(seed, {
-    lanes: LANES, startCell: 6, finishCell: FINISH_CELL,
+    lanes: LANES, startCell: GAME_CONFIG.obstacleStartCell, finishCell: FINISH_CELL,
+    density: GAME_CONFIG.obstacleDensity,
   });
   const map = new Map(obstacles.map(o => [`${o.cell},${o.lane}`, o]));
   return { obstacles, map };

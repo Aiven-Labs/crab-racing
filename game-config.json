@@ -1,0 +1,25 @@
+{
+  "_comment": "Single source of truth for the race track. server.js loads this at startup; the browser fetches the same file on load. Both derive the identical track from it, so client and server always agree (essential for multiplayer). Edit here to tune a custom game — no code changes needed. Opening game.html directly off the filesystem (file://) falls back to the defaults baked into game.html.",
+
+  "lanes": 3,
+
+  "obstacleDensity": 0.38,
+  "obstacleStartCell": 6,
+
+  "zones": [
+    { "tile": "shore",       "len": 5  },
+    { "tile": "wetSand",     "len": 8  },
+    { "tile": "drySand",     "len": 12 },
+    { "tile": "undergrowth", "len": 10 },
+    { "tile": "treeline",    "len": 8  },
+    { "tile": "finish",      "len": 3  }
+  ],
+
+  "obstacleKinds": [
+    { "type": "hole",  "effect": "stun",  "turns": 2, "msg": "FELL IN A HOLE!"     },
+    { "type": "jelly", "effect": "stun",  "turns": 1, "msg": "STUNG!"              },
+    { "type": "rock",  "effect": "block",             "msg": "BLOCKED BY ROCK!"    },
+    { "type": "beach", "effect": "push",              "msg": "TOURIST KICKED YOU!" },
+    { "type": "net",   "effect": "stun",  "turns": 1, "msg": "TANGLED IN A NET!"   }
+  ]
+}

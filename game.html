@@ -338,14 +338,23 @@ function drawNet(ctx) {
 // simulates the exact same track. Solo races seed from the lobby (custom or random).
 //
 // IMPORTANT: this generator must stay byte-for-byte identical to the one in
-// server.js — the same seed must produce the same obstacles on both sides.
-const OBSTACLE_KINDS = [
+// server.js — the same seed + config must produce the same obstacles on both sides.
+//
+// The track (lanes, zones, obstacle density and this kinds table) is defined in
+// game-config.json, which the client fetches on load; applyGameConfig() overwrites
+// the values below once it arrives. The literals here are the fallback used when
+// the page is opened straight off the filesystem (no server / no config file).
+let OBSTACLE_KINDS = [
   { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
   { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
   { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
   { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
   { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
 ];
+
+// Obstacle placement tunables — overwritten by applyGameConfig() from the server.
+let OBSTACLE_DENSITY    = 0.38;
+let OBSTACLE_START_CELL = 6;
 
 // xmur3 string hash → 32-bit int (lets custom seeds be arbitrary strings)
 function hashSeed(str) {
@@ -393,14 +402,15 @@ let raceSeed  = null;
 function buildObstacles(seed) {
   raceSeed  = seed;
   OBSTACLES = generateObstacles(seed, {
-    totalCells: TOTAL_CELLS, lanes: LANES, startCell: 6, finishCell: FINISH_CELL,
+    totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
+    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY,
   });
   OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
 }
 
 // ─── track ────────────────────────────────────────────────────────────────────
 const CELL  = 32;   // texture cell size in source pixels
-const LANES = 3;
+let   LANES = 3;    // overwritten by applyGameConfig() from the server
 
 // ─── render resolution ──────────────────────────────────────────────────────────
 // The game world is laid out in a 480×270 logical space, but we render into a
@@ -413,7 +423,10 @@ const RES    = Math.max(2, Math.min(4,
 ));
 const CELLR  = CELL * RES;              // on-screen cell size
 const fs     = (n) => `${Math.round(n * RES)}px`;   // logical font size → device px
-const ZONES = [
+// Track layout — also overwritten by applyGameConfig() from the server. The
+// literals here are the filesystem fallback; TRACK / TOTAL_CELLS / FINISH_CELL
+// are derived from ZONES and recomputed by rebuildTrack().
+let ZONES = [
   { tile: 'shore',       len: 5  },
   { tile: 'wetSand',     len: 8  },
   { tile: 'drySand',     len: 12 },
@@ -421,10 +434,31 @@ const ZONES = [
   { tile: 'treeline',    len: 8  },
   { tile: 'finish',      len: 3  },
 ];
-const TRACK       = [];
-for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
-const TOTAL_CELLS = TRACK.length;
-const FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
+let TRACK       = [];
+let TOTAL_CELLS = 0;
+let FINISH_CELL = 0;
+
+// Derive TRACK / TOTAL_CELLS / FINISH_CELL from the current ZONES.
+function rebuildTrack() {
+  TRACK = [];
+  for (const z of ZONES) for (let i = 0; i < z.len; i++) TRACK.push(z.tile);
+  TOTAL_CELLS = TRACK.length;
+  FINISH_CELL = TOTAL_CELLS - ZONES.at(-1).len;
+}
+rebuildTrack();
+
+// Apply a game config object (the parsed game-config.json). Overwrites the track
+// tunables and rebuilds the derived track. Any missing key keeps its current
+// (default) value, so a partial config is safe.
+function applyGameConfig(game) {
+  if (!game) return;
+  if (Number.isFinite(game.lanes))             LANES = game.lanes;
+  if (Number.isFinite(game.obstacleDensity))   OBSTACLE_DENSITY = game.obstacleDensity;
+  if (Number.isFinite(game.obstacleStartCell)) OBSTACLE_START_CELL = game.obstacleStartCell;
+  if (Array.isArray(game.zones) && game.zones.length)         ZONES = game.zones;
+  if (Array.isArray(game.obstacleKinds) && game.obstacleKinds.length) OBSTACLE_KINDS = game.obstacleKinds;
+  rebuildTrack();
+}
 
 // ─── lobby / WebSocket ────────────────────────────────────────────────────────
 function $id(id) { return document.getElementById(id); }
@@ -513,6 +547,15 @@ async function loadServerConfig() {
       if (cfg && cfg.wsUrl) configWsUrl = String(cfg.wsUrl);
     }
   } catch { /* no /config — same-origin default stands */ }
+  // Track config (lanes / zones / obstacles) is a separate static file so it works
+  // whether the page is served by the node server or a plain static host (e.g. the
+  // nginx container). Loaded from the same origin as the page; both the client and
+  // the node server read the identical game-config.json, so they simulate the same
+  // track. Silent on failure (e.g. file://) — the baked-in defaults stand.
+  try {
+    const res = await fetch('game-config.json');
+    if (res.ok) applyGameConfig(await res.json());
+  } catch { /* no server / no file — defaults stand */ }
 }
 
 // centiseconds → "m:ss.cc"
