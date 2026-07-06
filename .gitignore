@@ -5,6 +5,10 @@ node_modules/
 .env
 .env.local
 
+# Local game tuning — copy game-config.example.json to game-config.json and edit.
+# The live file is per-deploy and shouldn't be committed (defaults live in code).
+game-config.json
+
 # Kafka client certificates & keys (Aiven mTLS) — never commit
 certs/
 *.pem

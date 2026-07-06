@@ -752,7 +752,15 @@ class RaceScene extends Phaser.Scene {
 
     // ── scene state ────────────────────────────────────────────
     const { width: W, height: H } = this.scale;
-    const trackTop = Math.floor((H - LANES * CELLR) / 2);
+    // Centre the track when it fits the viewport; when there are more lanes than
+    // fit vertically, top-align it (trackTop 0) so no lane starts off-screen and
+    // the camera can scroll down through the rest.
+    const trackH   = LANES * CELLR;
+    const trackTop = Math.max(0, Math.floor((H - trackH) / 2));
+    // World is as tall as the track (or the viewport, whichever is larger) so the
+    // camera has room to follow the crab vertically past the viewport edge.
+    const worldH   = Math.max(H, trackTop + trackH);
+    this.worldH       = worldH;
     this.trackTop     = trackTop;
     this.busy         = false;
     this.won          = false;
@@ -788,9 +796,15 @@ class RaceScene extends Phaser.Scene {
       this._setupSoloCrab(trackTop);
     }
 
-    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELLR, H);
-    this.cameras.main.startFollow(this.crab, true, 0.1, 1);
-    this.cameras.main.setDeadzone(60 * RES, H);
+    // Bounds span the full world (track can be taller than the viewport when
+    // there are many lanes), so the camera can follow the crab in both axes.
+    this.cameras.main.setBounds(0, 0, TOTAL_CELLS * CELLR, worldH);
+    this.cameras.main.startFollow(this.crab, true, 0.1, 0.1);
+    // Horizontal deadzone (60px band) lets the crab move a little before the view
+    // pans sideways. Zero height means the camera always keeps the crab centred
+    // vertically — which does nothing while the track fits the viewport (bounds
+    // clamp it), and scrolls to follow the crab once there are more lanes than fit.
+    this.cameras.main.setDeadzone(60 * RES, 0);
 
     // ── HUD ────────────────────────────────────────────────────
     this.hudText = this.add.text(8 * RES, 8 * RES, '', {

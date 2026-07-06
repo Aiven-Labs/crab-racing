@@ -1,5 +1,5 @@
 {
-  "_comment": "Single source of truth for the race track. server.js loads this at startup; the browser fetches the same file on load. Both derive the identical track from it, so client and server always agree (essential for multiplayer). Edit here to tune a custom game — no code changes needed. Opening game.html directly off the filesystem (file://) falls back to the defaults baked into game.html.",
+  "_comment": "Example track config. Copy this to game-config.json and edit to tune a custom game — no code changes needed. server.js loads game-config.json at startup and the browser fetches the same file on load, so client and server always derive the identical track (essential for multiplayer). If game-config.json is absent, both fall back to the defaults baked into the code (which match this file). Opening game.html straight off the filesystem (file://) can't fetch it and always uses the baked-in defaults.",
 
   "lanes": 3,
 
