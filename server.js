@@ -195,13 +195,82 @@ function loadGameConfig() {
   }
 }
 
+// The loaded config is the DEFAULT track. Each room gets its own config (built
+// by buildRoomConfig from a joiner's overrides), so GAME_CONFIG is only the
+// baseline a room inherits when the creator doesn't customise a field.
 const GAME_CONFIG = loadGameConfig();
 
-const LANES         = GAME_CONFIG.lanes;
-const ZONES         = GAME_CONFIG.zones;
-const OBSTACLE_KINDS = GAME_CONFIG.obstacleKinds;
-const TOTAL_CELLS   = ZONES.reduce((s, z) => s + z.len, 0);
-const FINISH_CELL   = TOTAL_CELLS - ZONES[ZONES.length - 1].len;
+// Bounds for per-lobby overrides — clamped server-side so a malicious/buggy
+// client can't hang the server with e.g. lanes: 1e9 or a 1e9-cell track.
+const LANE_MIN = 1,  LANE_MAX = 12;
+const LEN_MIN  = 10, LEN_MAX  = 200;
+
+// Scale a base zone list's lengths proportionally to hit `targetLen` total cells,
+// preserving the tile sequence. Each zone keeps at least 1 cell; rounding drift
+// is absorbed by the largest zone so the total lands exactly on targetLen.
+function scaleZones(baseZones, targetLen) {
+  const baseTotal = baseZones.reduce((s, z) => s + z.len, 0);
+  const scaled = baseZones.map(z => ({
+    ...z, len: Math.max(1, Math.round(z.len * targetLen / baseTotal)),
+  }));
+  const drift = targetLen - scaled.reduce((s, z) => s + z.len, 0);
+  if (drift !== 0) {
+    let bi = 0;
+    for (let i = 1; i < scaled.length; i++) if (scaled[i].len > scaled[bi].len) bi = i;
+    scaled[bi].len = Math.max(1, scaled[bi].len + drift);
+  }
+  return scaled;
+}
+
+/** Build a room's track config from optional client overrides, starting from the
+ *  server default (GAME_CONFIG) and clamping every value to a safe range. */
+function buildRoomConfig(overrides = {}) {
+  const o = overrides || {};
+
+  // lanes: integer within [LANE_MIN, LANE_MAX]; bad/missing → default.
+  let lanes = Math.round(Number(o.lanes));
+  if (!Number.isFinite(lanes)) lanes = GAME_CONFIG.lanes;
+  lanes = Math.max(LANE_MIN, Math.min(LANE_MAX, lanes));
+
+  // trackLength: integer within [LEN_MIN, LEN_MAX] → scaled zones; else default zones.
+  let zones = GAME_CONFIG.zones;
+  let len = Math.round(Number(o.trackLength));
+  if (Number.isFinite(len)) {
+    len = Math.max(LEN_MIN, Math.min(LEN_MAX, len));
+    zones = scaleZones(GAME_CONFIG.zones, len);
+  }
+
+  // obstacleKinds: allowlist of type names → filter the server's kinds table, so
+  // only known obstacles (with their fixed effects/turns/msgs) can appear. This
+  // ignores unknown types, preventing injection of arbitrary effects. Empty or
+  // missing → keep all default kinds.
+  let obstacleKinds = GAME_CONFIG.obstacleKinds;
+  if (Array.isArray(o.obstacleKinds) && o.obstacleKinds.length) {
+    const allow = new Set(o.obstacleKinds.map(String));
+    const filtered = GAME_CONFIG.obstacleKinds.filter(k => allow.has(k.type));
+    if (filtered.length) obstacleKinds = filtered;
+  }
+
+  const totalCells = zones.reduce((s, z) => s + z.len, 0);
+  const finishCell = totalCells - zones[zones.length - 1].len;
+  return {
+    lanes, zones, obstacleKinds, totalCells, finishCell,
+    obstacleStartCell: GAME_CONFIG.obstacleStartCell,
+    obstacleDensity:   GAME_CONFIG.obstacleDensity,
+  };
+}
+
+// Serialisable subset of a room config to ship to clients (drives applyGameConfig
+// there). Mirrors the shape game-config.json / applyGameConfig expects.
+function configForClient(config) {
+  return {
+    lanes: config.lanes,
+    zones: config.zones,
+    obstacleKinds: config.obstacleKinds,
+    obstacleStartCell: config.obstacleStartCell,
+    obstacleDensity: config.obstacleDensity,
+  };
+}
 
 // Obstacles are placed procedurally from a per-room seed so every race gets a
 // fresh but fair layout. This server is authoritative: it picks the seed (or
@@ -236,24 +305,24 @@ function mulberry32(a) {
 // Deterministically place obstacles. At most one per cell column, so at least
 // two lanes are always open — the track is never fully blocked.
 function generateObstacles(seed, opts) {
-  const { lanes, startCell, finishCell, density = 0.38 } = opts;
+  const { lanes, startCell, finishCell, density = 0.38, obstacleKinds } = opts;
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
   const rng = mulberry32(seedNum);
   const list = [];
   for (let cell = startCell; cell < finishCell - 1; cell++) {
     if (rng() >= density) continue;
     const lane = Math.floor(rng() * lanes);
-    const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
+    const kind = obstacleKinds[Math.floor(rng() * obstacleKinds.length)];
     list.push({ cell, lane, ...kind });
   }
   return list;
 }
 
-/** Build the obstacle list + lookup map for a given seed. */
-function buildObstacles(seed) {
+/** Build the obstacle list + lookup map for a given seed and room config. */
+function buildObstacles(seed, config) {
   const obstacles = generateObstacles(seed, {
-    lanes: LANES, startCell: GAME_CONFIG.obstacleStartCell, finishCell: FINISH_CELL,
-    density: GAME_CONFIG.obstacleDensity,
+    lanes: config.lanes, startCell: config.obstacleStartCell, finishCell: config.finishCell,
+    density: config.obstacleDensity, obstacleKinds: config.obstacleKinds,
   });
   const map = new Map(obstacles.map(o => [`${o.cell},${o.lane}`, o]));
   return { obstacles, map };
@@ -317,15 +386,15 @@ async function getLeaderboard() {
 const rooms   = new Map(); // roomId → Room
 const clients = new Map(); // ws     → { playerId, roomId, name }
 
-function makeRoom(id, seed) {
-  const { obstacles, map } = buildObstacles(seed);
-  return { id, players: new Map(), started: false, finished: false, seed, obsMap: map, obstacles };
+function makeRoom(id, seed, config) {
+  const { obstacles, map } = buildObstacles(seed, config);
+  return { id, players: new Map(), started: false, finished: false, seed, config, obsMap: map, obstacles };
 }
 
-function makePlayer(id, name, colorIdx) {
+function makePlayer(id, name, colorIdx, lanes) {
   return {
     id, name, colorIdx,
-    cell: 0, lane: colorIdx % LANES,
+    cell: 0, lane: colorIdx % lanes,
     stunTurns: 0, won: false,
   };
 }
@@ -362,7 +431,7 @@ function applyMove(room, playerId, dx, dlane) {
 
   const nc = p.cell + dx;
   const nl = p.lane + dlane;
-  if (nc < 0 || nc >= TOTAL_CELLS || nl < 0 || nl >= LANES) return { ok: false };
+  if (nc < 0 || nc >= room.config.totalCells || nl < 0 || nl >= room.config.lanes) return { ok: false };
 
   const obs = room.obsMap.get(`${nc},${nl}`);
   if (obs?.effect === 'block') {
@@ -382,7 +451,7 @@ function applyMove(room, playerId, dx, dlane) {
     effect = { type: 'push', msg: obs.msg };
   }
 
-  if (p.cell >= FINISH_CELL) { p.won = true; room.finished = true; }
+  if (p.cell >= room.config.finishCell) { p.won = true; room.finished = true; }
 
   return { ok: true, effect, won: p.won };
 }
@@ -395,7 +464,7 @@ function startCountdown(room, roomId) {
     broadcast(roomId, { type: 'countdown', count });
     if (count-- <= 0) {
       clearInterval(tick);
-      broadcast(roomId, { type: 'go', seed: room.seed, players: snapshot(room) });
+      broadcast(roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
     }
   }, 1000);
 }
@@ -519,7 +588,13 @@ async function main() {
           : (Math.floor(Math.random() * 0xffffffff)).toString();
 
         let room = rooms.get(roomId);
-        if (!room) { room = makeRoom(roomId, seed); rooms.set(roomId, room); }
+        if (!room) {
+          // First joiner also fixes the room's track config (lanes / length /
+          // obstacle kinds), clamped server-side. Later joiners inherit room.config.
+          const config = buildRoomConfig(msg.config);
+          room = makeRoom(roomId, seed, config);
+          rooms.set(roomId, room);
+        }
 
         if (room.started) {
           sendTo(ws, { type: 'error', msg: 'Race already started — try another room' });
@@ -528,10 +603,10 @@ async function main() {
 
         const playerId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
         const colorIdx = room.players.size % 4;
-        room.players.set(playerId, makePlayer(playerId, name, colorIdx));
+        room.players.set(playerId, makePlayer(playerId, name, colorIdx, room.config.lanes));
         clients.set(ws, { playerId, roomId, name });
 
-        sendTo(ws, { type: 'joined', playerId, colorIdx, seed: room.seed, players: snapshot(room) });
+        sendTo(ws, { type: 'joined', playerId, colorIdx, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
         broadcast(roomId, { type: 'player-joined', name, players: snapshot(room) });
         console.log(`[room:${roomId}] ${name} joined (${room.players.size} players)`);
 
@@ -572,7 +647,7 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
         room.started = true;
-        broadcast(info.roomId, { type: 'go', seed: room.seed, players: snapshot(room) });
+        broadcast(info.roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
       }
     });
 

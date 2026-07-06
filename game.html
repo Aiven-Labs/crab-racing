@@ -56,6 +56,22 @@
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
 
+  /* ── Track settings (per-lobby) ────────────────────── */
+  #track-settings { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
+  #track-settings > summary {
+    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
+    padding: 8px 0; list-style: none; user-select: none;
+  }
+  #track-settings > summary::before { content: '⚙ '; }
+  #track-settings[open] > summary { color: #a0c8e8; }
+  #track-settings .ts-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
+  #track-settings label { font-size: 13px; color: #7ea8c8; }
+  .ts-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ts-field input { width: 90px !important; }
+  #cfg-obstacles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  #cfg-obstacles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #cfg-obstacles input { width: auto !important; }
+
   /* ── Leaderboard ───────────────────────────────────── */
   #leaderboard { font-family: monospace; color: #c0d8f0; }
   #leaderboard h2 {
@@ -136,6 +152,23 @@
     <div class="sub">COASTAL SURVIVAL RACE</div>
     <button id="btn-help">❓ How to Play</button>
     <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+    <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
+         Join (the room creator's settings fix the room, later joiners inherit). -->
+    <details id="track-settings">
+      <summary>Track settings</summary>
+      <div class="ts-body">
+        <div class="ts-field">
+          <label for="cfg-lanes">Lanes</label>
+          <input id="cfg-lanes" type="number" min="1" max="12" placeholder="3">
+        </div>
+        <div class="ts-field">
+          <label for="cfg-length">Track length</label>
+          <input id="cfg-length" type="number" min="10" max="200" placeholder="46">
+        </div>
+        <label>Obstacles</label>
+        <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+      </div>
+    </details>
     <button id="btn-solo">Solo Race</button>
     <hr>
     <div id="multi-section">
@@ -460,6 +493,92 @@ function applyGameConfig(game) {
   rebuildTrack();
 }
 
+// ─── per-lobby track settings ───────────────────────────────────────────────────
+// The lobby lets a player customise the track (lanes / length / which obstacle
+// kinds). In multiplayer the server is authoritative and clamps these; solo runs
+// apply them locally. Bounds + scaleZones mirror server.js so both agree.
+const LANE_MIN = 1,  LANE_MAX = 12;
+const LEN_MIN  = 10, LEN_MAX  = 200;
+
+// Scale a base zone list's lengths proportionally to hit `targetLen` total cells.
+// Keep byte-for-byte identical to server.js's scaleZones.
+function scaleZones(baseZones, targetLen) {
+  const baseTotal = baseZones.reduce((s, z) => s + z.len, 0);
+  const scaled = baseZones.map(z => ({
+    ...z, len: Math.max(1, Math.round(z.len * targetLen / baseTotal)),
+  }));
+  const drift = targetLen - scaled.reduce((s, z) => s + z.len, 0);
+  if (drift !== 0) {
+    let bi = 0;
+    for (let i = 1; i < scaled.length; i++) if (scaled[i].len > scaled[bi].len) bi = i;
+    scaled[bi].len = Math.max(1, scaled[bi].len + drift);
+  }
+  return scaled;
+}
+
+// Baselines kept so lobby edits always scale/filter from the full defaults rather
+// than an already-narrowed set: ALL_OBSTACLE_KINDS lets a lobby re-enable a kind
+// it unchecked; ALL_OBSTACLE_ZONES is the unscaled zone list scaleZones() works
+// from. Snapshotted from the defaults on load.
+let ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
+let ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
+
+// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleKinds? }
+// omitting any field left at its default (blank number, all boxes checked) so that
+// "untouched" means "inherit the server/default config".
+function readLobbyConfig() {
+  const cfg = {};
+  const lanesRaw = $id('cfg-lanes').value.trim();
+  if (lanesRaw !== '') cfg.lanes = Number(lanesRaw);
+  const lenRaw = $id('cfg-length').value.trim();
+  if (lenRaw !== '') cfg.trackLength = Number(lenRaw);
+  const checked = ALL_OBSTACLE_KINDS
+    .filter(k => { const box = $id('cfg-ob-' + k.type); return box && box.checked; })
+    .map(k => k.type);
+  if (checked.length && checked.length < ALL_OBSTACLE_KINDS.length) cfg.obstacleKinds = checked;
+  return cfg;
+}
+
+// Build the obstacle on/off checkboxes from the current default kinds (all checked).
+// Rebuilt whenever the default kinds change (e.g. after the load-time config fetch).
+function buildObstacleToggles() {
+  const box = $id('cfg-obstacles');
+  if (!box) return;
+  const labels = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
+  box.innerHTML = ALL_OBSTACLE_KINDS.map(k =>
+    `<label><input type="checkbox" id="cfg-ob-${k.type}" checked>` +
+    `${labels[k.type] || k.type}</label>`
+  ).join('');
+}
+
+// Refresh the baselines the lobby scales/filters from. Call after the load-time
+// game-config.json fetch replaces the defaults, so solo customisation starts from
+// the deployed config (not the baked-in fallback). NOT called for per-room configs
+// from joined/go — those are already the room's final scaled track.
+function refreshLobbyBaselines() {
+  ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
+  ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
+  buildObstacleToggles();
+}
+
+// Apply lobby overrides to the local track (solo races). Clamps + scales exactly
+// like the server so a solo track matches what a multiplayer room would build.
+function applyLobbyConfig(cfg) {
+  if (Number.isFinite(cfg.lanes)) {
+    LANES = Math.max(LANE_MIN, Math.min(LANE_MAX, Math.round(cfg.lanes)));
+  }
+  if (Number.isFinite(cfg.trackLength)) {
+    const len = Math.max(LEN_MIN, Math.min(LEN_MAX, Math.round(cfg.trackLength)));
+    ZONES = scaleZones(ALL_OBSTACLE_ZONES, len);
+  }
+  if (Array.isArray(cfg.obstacleKinds) && cfg.obstacleKinds.length) {
+    const allow = new Set(cfg.obstacleKinds);
+    const filtered = ALL_OBSTACLE_KINDS.filter(k => allow.has(k.type));
+    if (filtered.length) OBSTACLE_KINDS = filtered;
+  }
+  rebuildTrack();
+}
+
 // ─── lobby / WebSocket ────────────────────────────────────────────────────────
 function $id(id) { return document.getElementById(id); }
 function setStatus(t) { $id('lobby-status').textContent = t; }
@@ -474,6 +593,9 @@ function handleServerMsg(msg) {
     case 'joined':
       myPlayerId = msg.playerId;
       myColorIdx = msg.colorIdx;
+      // Apply the room's track config (lanes / zones / obstacle kinds) BEFORE
+      // building obstacles so the client matches the server's authoritative track.
+      if (msg.config) applyGameConfig(msg.config);
       if (msg.seed != null) buildObstacles(msg.seed);
       setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
@@ -487,6 +609,7 @@ function handleServerMsg(msg) {
       break;
     case 'go':
       multiPlayers = msg.players;
+      if (msg.config) applyGameConfig(msg.config); // authoritative track config
       if (msg.seed != null) buildObstacles(msg.seed); // authoritative seed for the race
       $id('lobby').classList.add('hidden');
       startGame(true);
@@ -556,6 +679,9 @@ async function loadServerConfig() {
     const res = await fetch('game-config.json');
     if (res.ok) applyGameConfig(await res.json());
   } catch { /* no server / no file — defaults stand */ }
+  // Seed the lobby's track-settings baselines + checkboxes from whatever the
+  // default config ended up being (deployed file or baked-in fallback).
+  refreshLobbyBaselines();
 }
 
 // centiseconds → "m:ss.cc"
@@ -617,6 +743,7 @@ function readSeedInput() {
 }
 
 function startSolo() {
+  applyLobbyConfig(readLobbyConfig());   // custom lanes / length / obstacles
   buildObstacles(readSeedInput());
   $id('lobby').classList.add('hidden');
   startGame(false);
@@ -627,10 +754,11 @@ function joinMulti() {
   const name   = $id('player-name').value.trim() || 'Crab';
   const roomId = $id('room-code').value.trim()   || 'room1';
   const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
+  const config = readLobbyConfig(); // room creator's track settings; ignored for existing rooms
   setStatus('Connecting…');
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
-  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed }));
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed, config }));
   ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
   ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
