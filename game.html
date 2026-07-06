@@ -539,27 +539,47 @@ function readLobbyConfig() {
   return cfg;
 }
 
-// Build the obstacle on/off checkboxes from the current default kinds (all checked).
-// Rebuilt whenever the default kinds change (e.g. after the load-time config fetch).
+// Build the obstacle on/off checkboxes from the current default kinds. Preserves
+// the user's existing checked state across rebuilds (a kind already on screen keeps
+// its box; a newly-appearing kind defaults to checked), so a late config-load
+// refresh never clobbers a selection the player already made.
 function buildObstacleToggles() {
   const box = $id('cfg-obstacles');
   if (!box) return;
   const labels = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
-  box.innerHTML = ALL_OBSTACLE_KINDS.map(k =>
-    `<label><input type="checkbox" id="cfg-ob-${k.type}" checked>` +
-    `${labels[k.type] || k.type}</label>`
-  ).join('');
+  const prev = {};
+  box.querySelectorAll('input[type=checkbox]').forEach(b => {
+    prev[b.id.replace(/^cfg-ob-/, '')] = b.checked;
+  });
+  box.innerHTML = ALL_OBSTACLE_KINDS.map(k => {
+    const on = prev[k.type] !== false; // unknown → default checked
+    return `<label><input type="checkbox" id="cfg-ob-${k.type}"${on ? ' checked' : ''}>` +
+           `${labels[k.type] || k.type}</label>`;
+  }).join('');
 }
 
-// Refresh the baselines the lobby scales/filters from. Call after the load-time
-// game-config.json fetch replaces the defaults, so solo customisation starts from
-// the deployed config (not the baked-in fallback). NOT called for per-room configs
-// from joined/go — those are already the room's final scaled track.
+// Sync the lanes/length input placeholders to the current default track, so a
+// blank field honestly shows the value it will inherit (which the deployed
+// game-config.json may have changed from the baked-in 3 / 46).
+function syncLobbyPlaceholders() {
+  const lanes = $id('cfg-lanes'), len = $id('cfg-length');
+  if (lanes) lanes.placeholder = String(LANES);
+  if (len)   len.placeholder   = String(TOTAL_CELLS);
+}
+
+// Refresh the baselines the lobby scales/filters from. Call at init (from the
+// baked-in defaults) AND after the load-time game-config.json fetch, so solo
+// customisation starts from whatever default ended up loaded. NOT called for
+// per-room configs from joined/go — those are already the room's final track.
 function refreshLobbyBaselines() {
   ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
   ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
   buildObstacleToggles();
+  syncLobbyPlaceholders();
 }
+// Build the toggles immediately (DOM is ready — this script is at end of body) so
+// the settings panel is fully usable before the async config fetch resolves.
+refreshLobbyBaselines();
 
 // Apply lobby overrides to the local track (solo races). Clamps + scales exactly
 // like the server so a solo track matches what a multiplayer room would build.
