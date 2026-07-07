@@ -86,9 +86,25 @@ function serveStatic(req, res) {
     return;
   }
 
-  // "/" → game.html, anything else → filename in project dir
-  const urlPath = req.url === '/' ? '/game.html' : req.url.split('?')[0];
+  // "/" → game.html, anything else → filename in project dir.
+  // Decode percent-escapes so a request like /%2e%2e/.env can't smuggle a
+  // traversal past the containment check below.
+  let urlPath;
+  try {
+    urlPath = req.url === '/' ? '/game.html' : decodeURIComponent(req.url.split('?')[0]);
+  } catch {
+    res.writeHead(400); res.end('400 Bad Request'); return; // malformed %-escape
+  }
+
+  // Containment: resolve the requested path and confirm it stays inside
+  // __dirname. path.join collapses `..`, so without this a path that escapes
+  // the project dir (…/../.env, /etc/passwd) would be served from anywhere on
+  // disk. Reject anything that resolves outside the served root.
   const filePath = path.join(__dirname, urlPath);
+  const rel = path.relative(__dirname, filePath);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    res.writeHead(403); res.end('403 Forbidden'); return;
+  }
   const ext = path.extname(filePath);
 
   fs.readFile(filePath, (err, data) => {
