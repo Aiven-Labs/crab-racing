@@ -47,6 +47,9 @@ function postLeaderboard(req, res) {
     try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'bad json' }); }
     const name     = String(body.name || 'Crab').slice(0, 20);
     const timeCs   = Number(body.timeCs);
+    // Reject implausible times up front so a bad client gets a clear error
+    // rather than a silent no-op (recordScore also guards defensively).
+    if (!isValidTimeCs(timeCs)) return sendJson(res, 400, { error: 'invalid timeCs' });
     const colorIdx = Number(body.colorIdx) || 0;
     // The obstacle seed the race was run on — kept so a board entry can be
     // replayed on the identical track. May be absent from older clients.
@@ -131,6 +134,12 @@ const LB_COLOR_KEY = 'leaderboard:colors'; // hash: name → crab colorIdx
 const LB_SEED_KEY  = 'leaderboard:seeds';  // hash: name → obstacle seed for that run
 const LB_MAX      = 10;                    // keep only the top N
 const LB_TTL_SECS = 60 * 60;               // ephemeral: whole board expires after 1h idle
+// A finish time must be a positive centisecond count within a sane range. This
+// bounds untrusted input: a non-positive time would (via the negated score +
+// GT) pin an unbeatable top entry, and an absurd time is clearly bogus. Ceiling
+// is 1h — far longer than any real race on the largest track.
+const LB_MIN_TIME_CS = 1;
+const LB_MAX_TIME_CS = 60 * 60 * 100;
 
 // Aiven Kafka uses SSL client-certificate (mTLS) auth. The certs are provided
 // as PEM strings in env vars (KAFKA_ACCESS_KEY / KAFKA_ACCESS_CERT / KAFKA_CA_CERT).
@@ -344,11 +353,18 @@ function buildObstacles(seed, config) {
 // works — the leaderboard just silently no-ops rather than taking the server down.
 let valkey = null;
 
+/** True when `timeCs` is a plausible finish time (positive, in range). Rejects
+ *  the values that would corrupt the board — non-positive (unbeatable via the
+ *  negated GT score) or absurdly large. */
+function isValidTimeCs(timeCs) {
+  return Number.isFinite(timeCs) && timeCs >= LB_MIN_TIME_CS && timeCs <= LB_MAX_TIME_CS;
+}
+
 /** Record a finish. `timeCs` = race time in centiseconds (lower is better);
  *  `colorIdx` = which crab palette (0–3) the player raced as;
  *  `seed` = the obstacle seed the run was raced on (for replay). */
 async function recordScore(name, timeCs, colorIdx, seed = '') {
-  if (valkey?.status !== 'ready' || !name || !Number.isFinite(timeCs)) return;
+  if (valkey?.status !== 'ready' || !name || !isValidTimeCs(timeCs)) return;
   try {
     // Keep the player's *best* time only: GT means "update only if greater",
     // so we store the negated time and a fastest run wins the highest score.
