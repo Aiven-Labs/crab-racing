@@ -386,9 +386,23 @@ async function getLeaderboard() {
 const rooms   = new Map(); // roomId → Room
 const clients = new Map(); // ws     → { playerId, roomId, name }
 
+// How long a freshly-created lobby stays open for others to join. After this the
+// lobby locks automatically; the creator can also lock it early by starting the
+// match. Locked lobbies reject new joiners (see the join handler).
+const LOBBY_OPEN_MS = 60 * 1000;
+
 function makeRoom(id, seed, config) {
   const { obstacles, map } = buildObstacles(seed, config);
-  return { id, players: new Map(), started: false, finished: false, seed, config, obsMap: map, obstacles };
+  return {
+    id, players: new Map(), started: false, finished: false, locked: false,
+    hostId: null, lockTimer: null, seed, config, obsMap: map, obstacles,
+  };
+}
+
+/** Stop accepting new joiners (idempotent). Clears the auto-lock timer. */
+function lockLobby(room) {
+  room.locked = true;
+  if (room.lockTimer) { clearTimeout(room.lockTimer); room.lockTimer = null; }
 }
 
 function makePlayer(id, name, colorIdx, lanes) {
@@ -459,6 +473,7 @@ function applyMove(room, playerId, dx, dlane) {
 /** 3-2-1 countdown, then broadcast 'go' */
 function startCountdown(room, roomId) {
   room.started = true;
+  lockLobby(room); // no more joiners once the countdown begins
   let count = 3;
   const tick = setInterval(() => {
     broadcast(roomId, { type: 'countdown', count });
@@ -594,10 +609,18 @@ async function main() {
           const config = buildRoomConfig(msg.config);
           room = makeRoom(roomId, seed, config);
           rooms.set(roomId, room);
+          // The lobby stays open for LOBBY_OPEN_MS, then locks automatically so
+          // late arrivals can't join a stale room. The creator can lock it sooner
+          // by starting the match.
+          room.lockTimer = setTimeout(() => {
+            lockLobby(room);
+            broadcast(roomId, { type: 'lobby-locked', players: snapshot(room) });
+            console.log(`[room:${roomId}] lobby locked (timeout)`);
+          }, LOBBY_OPEN_MS);
         }
 
-        if (room.started) {
-          sendTo(ws, { type: 'error', msg: 'Race already started — try another room' });
+        if (room.started || room.locked) {
+          sendTo(ws, { type: 'error', msg: 'Lobby closed — try another room' });
           return;
         }
 
@@ -605,15 +628,16 @@ async function main() {
         const colorIdx = room.players.size % 4;
         room.players.set(playerId, makePlayer(playerId, name, colorIdx, room.config.lanes));
         clients.set(ws, { playerId, roomId, name });
+        // First player in the room is its host — only they may start the match.
+        if (!room.hostId) room.hostId = playerId;
 
-        sendTo(ws, { type: 'joined', playerId, colorIdx, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
+        sendTo(ws, {
+          type: 'joined', playerId, colorIdx, seed: room.seed,
+          config: configForClient(room.config), players: snapshot(room),
+          isHost: playerId === room.hostId, opensInMs: LOBBY_OPEN_MS,
+        });
         broadcast(roomId, { type: 'player-joined', name, players: snapshot(room) });
         console.log(`[room:${roomId}] ${name} joined (${room.players.size} players)`);
-
-        // Auto-start when 2+ players are in
-        if (room.players.size >= 2 && !room.started) {
-          startCountdown(room, roomId);
-        }
         return;
       }
 
@@ -640,6 +664,26 @@ async function main() {
         return;
       }
 
+      // ── start-match: the room host locks the lobby and kicks off the race ────
+      // Only the host (first joiner) may start, and only with 2+ players so a
+      // lone crab doesn't launch a "multiplayer" race by itself.
+      if (msg.type === 'start-match') {
+        const info = clients.get(ws);
+        if (!info) return;
+        const room = rooms.get(info.roomId);
+        if (!room || room.started) return;
+        if (info.playerId !== room.hostId) {
+          sendTo(ws, { type: 'error', msg: 'Only the lobby host can start the match' });
+          return;
+        }
+        if (room.players.size < 2) {
+          sendTo(ws, { type: 'error', msg: 'Need at least 2 players to start' });
+          return;
+        }
+        startCountdown(room, info.roomId);
+        return;
+      }
+
       // ── solo-multi: 1-player room, start immediately (for testing) ──────────
       if (msg.type === 'solo-start') {
         const info = clients.get(ws);
@@ -647,6 +691,7 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
         room.started = true;
+        lockLobby(room);
         broadcast(info.roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
       }
     });
@@ -657,12 +702,22 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (room) {
           room.players.delete(info.playerId);
+          // If the host bailed, promote the next remaining player so an open
+          // lobby always has someone who can start it.
+          if (info.playerId === room.hostId) {
+            const next = room.players.keys().next();
+            room.hostId = next.done ? null : next.value;
+            if (room.hostId && !room.started) {
+              broadcast(info.roomId, { type: 'host-changed', hostId: room.hostId });
+            }
+          }
           broadcast(info.roomId, {
             type:     'player-left',
             playerId: info.playerId,
             players:  snapshot(room),
           });
           if (room.players.size === 0) {
+            if (room.lockTimer) clearTimeout(room.lockTimer);
             rooms.delete(info.roomId);
             console.log(`[room:${info.roomId}] closed (empty)`);
           }

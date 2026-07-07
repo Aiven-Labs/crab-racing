@@ -181,6 +181,9 @@
     </div>
     <div id="lobby-status">Enter a name &amp; room, then Join</div>
     <div id="player-list"></div>
+    <!-- Shown to the lobby host once 2+ players are in, so they can start the
+         race before the lobby's join window elapses. -->
+    <button id="btn-start" class="hidden">Start Match</button>
     <hr>
     <div id="leaderboard">
       <h2>🏆 Fastest Crabs</h2>
@@ -228,6 +231,8 @@ let myColorIdx   = 0;
 let multiMode    = false;
 let multiPlayers = [];    // player list received with 'go' message
 let gameScene    = null;  // set by RaceScene.create()
+let isHost       = false; // true when this client created the lobby (may start it)
+let lobbyLocked  = false; // true once the lobby stops accepting new joiners
 
 const CRAB_PALETTES = [
   ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
@@ -603,28 +608,61 @@ function applyLobbyConfig(cfg) {
 function $id(id) { return document.getElementById(id); }
 function setStatus(t) { $id('lobby-status').textContent = t; }
 function setPlayerList(players) {
+  lastPlayerCount = players.length;
   $id('player-list').innerHTML = players
     .map(p => `<span style="color:${PALETTE_HEX[p.colorIdx]}">${p.name}</span>`)
     .join(' · ');
 }
 
+let lastPlayerCount = 0;
+function currentPlayerCount() { return lastPlayerCount; }
+
+// Show the Start button only to the host, only with 2+ players, and only while
+// the lobby is still open (not locked / counting down).
+function updateStartButton(playerCount) {
+  const btn = $id('btn-start');
+  const show = isHost && !lobbyLocked && playerCount >= 2;
+  btn.classList.toggle('hidden', !show);
+}
+
+function startMatch() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'start-match' }));
+}
+
 function handleServerMsg(msg) {
   switch (msg.type) {
     case 'joined':
-      myPlayerId = msg.playerId;
-      myColorIdx = msg.colorIdx;
+      myPlayerId  = msg.playerId;
+      myColorIdx  = msg.colorIdx;
+      isHost      = !!msg.isHost;
+      lobbyLocked = false;
       // Apply the room's track config (lanes / zones / obstacle kinds) BEFORE
       // building obstacles so the client matches the server's authoritative track.
       if (msg.config) applyGameConfig(msg.config);
       if (msg.seed != null) buildObstacles(msg.seed);
       setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
+      updateStartButton(msg.players.length);
       break;
     case 'player-joined':
       setStatus(`${msg.players.length} player(s) ready`);
       setPlayerList(msg.players);
+      updateStartButton(msg.players.length);
+      break;
+    case 'host-changed':
+      // The previous host left; we may have been promoted.
+      isHost = msg.hostId === myPlayerId;
+      updateStartButton(currentPlayerCount());
+      break;
+    case 'lobby-locked':
+      lobbyLocked = true;
+      setStatus('Lobby locked — waiting for host to start…');
+      updateStartButton(msg.players ? msg.players.length : currentPlayerCount());
       break;
     case 'countdown':
+      lobbyLocked = true;
+      updateStartButton(0);
       setStatus(`Starting in ${msg.count}…`);
       break;
     case 'go':
@@ -807,10 +845,13 @@ function goHome() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene = null;
   if (ws) { try { ws.close(); } catch {} ws = null; }
-  myPlayerId = null;
-  multiMode  = false;
+  myPlayerId  = null;
+  multiMode   = false;
+  isHost      = false;
+  lobbyLocked = false;
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
+  $id('btn-start').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
   fetchLeaderboard();
@@ -820,6 +861,7 @@ $id('btn-home').onclick = goHome;
 
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
+$id('btn-start').onclick = startMatch;
 
 // ─── How-to-play modal ────────────────────────────────────────────────────────
 // The obstacle list is built from the same OBSTACLE_KINDS table + sprite drawers
