@@ -6,6 +6,9 @@
   "obstacleDensity": 0.38,
   "obstacleStartCell": 6,
 
+  "_dnf_comment": "Seconds the rest of the field gets to finish after the first crab crosses the line. When it elapses the race ends and any crab still going is recorded DNF. Clamped server-side to 3–120.",
+  "dnfTimeoutSecs": 15,
+
   "zones": [
     { "tile": "shore",       "len": 5  },
     { "tile": "wetSand",     "len": 8  },

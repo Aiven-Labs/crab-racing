@@ -200,8 +200,10 @@
     <h2>🦀 How to Play</h2>
     <p class="goal">Scuttle your crab from the shoreline all the way to the
       checkered finish line. Reach it as fast as you can — the clock is running,
-      and the fastest crabs make the leaderboard. In a multiplayer room, first
-      crab across wins.</p>
+      and the fastest crabs make the leaderboard. In a multiplayer room the race
+      keeps going after the first finish: once one crab crosses, everyone else
+      gets a few seconds to reach the line before the race ends — stragglers are
+      recorded as <strong>DNF</strong>.</p>
 
     <h3>Controls</h3>
     <ul id="help-keys">
@@ -475,6 +477,11 @@ let ZONES = [
 let TRACK       = [];
 let TOTAL_CELLS = 0;
 let FINISH_CELL = 0;
+// Seconds the rest of the field gets to finish after the first crab crosses the
+// line before the race ends and stragglers are recorded DNF. Overwritten by
+// applyGameConfig() from the server; the server is authoritative on the actual
+// cutoff — this is only used to render the on-screen countdown.
+let DNF_TIMEOUT_SECS = 15;
 
 // Derive TRACK / TOTAL_CELLS / FINISH_CELL from the current ZONES.
 function rebuildTrack() {
@@ -495,6 +502,7 @@ function applyGameConfig(game) {
   if (Number.isFinite(game.obstacleStartCell)) OBSTACLE_START_CELL = game.obstacleStartCell;
   if (Array.isArray(game.zones) && game.zones.length)         ZONES = game.zones;
   if (Array.isArray(game.obstacleKinds) && game.obstacleKinds.length) OBSTACLE_KINDS = game.obstacleKinds;
+  if (Number.isFinite(game.dnfTimeoutSecs))    DNF_TIMEOUT_SECS = game.dnfTimeoutSecs;
   rebuildTrack();
 }
 
@@ -675,11 +683,20 @@ function handleServerMsg(msg) {
     case 'state':
       if (gameScene) gameScene.applyServerState(msg.players, msg.result, msg.movedId);
       break;
-    case 'win':
+    case 'finish':
+      // A crab (maybe me) crossed the line. The race keeps going for the rest.
       if (gameScene) {
-        if (msg.playerId === myPlayerId) gameScene.onWin();
-        else gameScene.onOtherWin(msg.name);
+        if (msg.playerId === myPlayerId) gameScene.onFinish(msg.place, msg.finishTimeCs);
+        else gameScene.onOtherFinish(msg.name, msg.place);
       }
+      break;
+    case 'dnf-window':
+      // First finisher opened the DNF window — start the on-screen countdown.
+      if (gameScene) gameScene.startDnfCountdown(msg.ms);
+      break;
+    case 'race-over':
+      // Everyone finished or the DNF window closed — show the final results.
+      if (gameScene) gameScene.onRaceOver(msg.results);
       break;
     case 'player-left':
       if (gameScene) gameScene.onPlayerLeft(msg.playerId);
@@ -746,6 +763,13 @@ async function loadServerConfig() {
 function fmtTime(cs) {
   const c = cs % 100, sec = Math.floor(cs / 100), m = Math.floor(sec / 60), s = sec % 60;
   return `${m}:${s.toString().padStart(2,'0')}.${c.toString().padStart(2,'0')}`;
+}
+
+// 1 → "1st", 2 → "2nd", 3 → "3rd", 4 → "4th" … (handles the 11–13 exceptions)
+function ordinal(n) {
+  const v = n % 100;
+  const suffix = (v >= 11 && v <= 13) ? 'th' : ['th','st','nd','rd'][Math.min(n % 10, 4)] || 'th';
+  return `${n}${suffix}`;
 }
 
 function renderLeaderboard(board) {
@@ -953,11 +977,13 @@ class RaceScene extends Phaser.Scene {
     this.worldH       = worldH;
     this.trackTop     = trackTop;
     this.busy         = false;
-    this.won          = false;
+    this.won          = false; // my crab has crossed the finish line
+    this.raceOver     = false; // the whole race has ended (results are in)
     this.stunTurns    = 0;
     this.raceTime     = 0;
     this.timerStarted = false;
     this.timerEvent   = null;
+    this.dnfEvent     = null;  // ticks down the on-screen DNF countdown
 
     // ── terrain ────────────────────────────────────────────────
     for (let cx = 0; cx < TOTAL_CELLS; cx++)
@@ -1007,10 +1033,20 @@ class RaceScene extends Phaser.Scene {
       color: '#ff6060', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5, 0).setScrollFactor(0);
 
-    this.timerText = this.add.text(W - 8 * RES, 8 * RES, multiMode ? '' : '0:00.00', {
+    this.timerText = this.add.text(W - 8 * RES, 8 * RES, '0:00.00', {
       fontFamily: 'monospace', fontSize: fs(12),
       color: '#e8e030', stroke: '#000', strokeThickness: 3,
     }).setOrigin(1, 0).setScrollFactor(0);
+
+    // DNF countdown banner — hidden until the first crab finishes (multiplayer).
+    this.dnfText = this.add.text(W / 2, 22 * RES, '', {
+      fontFamily: 'monospace', fontSize: fs(12),
+      color: '#ffb020', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5, 0).setScrollFactor(0);
+
+    // In multiplayer the race clock runs from the 'go' (create() fires then), so
+    // the HUD shows elapsed time immediately rather than waiting on the first move.
+    if (multiMode) this._startTimer();
 
     this.add.text(W / 2, H - 6 * RES, 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)', {
       fontFamily: 'monospace', fontSize: fs(10),
@@ -1118,21 +1154,7 @@ class RaceScene extends Phaser.Scene {
     }
 
     // SOLO: local authoritative logic (unchanged from original)
-    if (!this.timerStarted) {
-      this.timerStarted = true;
-      this.timerEvent = this.time.addEvent({
-        delay: 10, loop: true,
-        callback: () => {
-          this.raceTime++;
-          const cs  = this.raceTime % 100;
-          const sec = Math.floor(this.raceTime / 100);
-          const m   = Math.floor(sec / 60), s = sec % 60;
-          this.timerText.setText(
-            `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`
-          );
-        },
-      });
-    }
+    if (!this.timerStarted) this._startTimer();
 
     if (this.stunTurns > 0) {
       this.stunTurns--;
@@ -1259,6 +1281,22 @@ class RaceScene extends Phaser.Scene {
     this.time.delayedCall(1500, () => this.statusText.setText(''));
   }
 
+  // ── _startTimer ───────────────────────────────────────────────────────────
+  // Drive the on-screen race clock at centisecond resolution. In solo this is the
+  // authoritative time submitted to the leaderboard; in multiplayer it's display
+  // only (the server stamps the authoritative finish time).
+  _startTimer() {
+    if (this.timerStarted) return;
+    this.timerStarted = true;
+    this.timerEvent = this.time.addEvent({
+      delay: 10, loop: true,
+      callback: () => {
+        this.raceTime++;
+        this.timerText.setText(fmtTime(this.raceTime));
+      },
+    });
+  }
+
   // ── refreshHUD ──────────────────────────────────────────────────────────────
   refreshHUD() {
     const zone = TRACK[Math.min(this.cell, TOTAL_CELLS - 1)];
@@ -1268,7 +1306,9 @@ class RaceScene extends Phaser.Scene {
     this.hudText.setText(`${zone.toUpperCase()}  ${bar}  ${pct}%`);
   }
 
-  // ── onWin ───────────────────────────────────────────────────────────────────
+  // ── onWin (solo) ──────────────────────────────────────────────────────────
+  // Solo races end the instant the crab finishes — there's no field to wait on.
+  // Multiplayer finishes go through onFinish/onRaceOver instead.
   onWin() {
     if (this.won) return;
     this.won = true;
@@ -1282,55 +1322,113 @@ class RaceScene extends Phaser.Scene {
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
     submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '');
 
-    if (multiMode) {
-      this.add.rectangle(W/2, H/2, 240*RES, 80*RES, 0x0a1828, 230).setScrollFactor(0);
-      this.add.text(W/2, H/2 - 16*RES, '🦀  YOU WIN!  🦀', {
-        fontFamily: 'monospace', fontSize: fs(20),
-        color: '#e8e030', stroke: '#000', strokeThickness: 4,
-      }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 16*RES, 'tap 🏠 Home for the leaderboard', {
-        fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
-        stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0);
-    } else {
-      const cs  = this.raceTime % 100;
-      const sec = Math.floor(this.raceTime / 100);
-      const m   = Math.floor(sec / 60), s = sec % 60;
-      const timeStr = `${m}:${s.toString().padStart(2,'0')}.${cs.toString().padStart(2,'0')}`;
+    this.add.rectangle(W/2, H/2, 240*RES, 92*RES, 0x0a1828, 230).setScrollFactor(0);
+    this.add.text(W/2, H/2 - 22*RES, '🦀  FINISH!  🦀', {
+      fontFamily: 'monospace', fontSize: fs(20),
+      color: '#e8e030', stroke: '#000', strokeThickness: 4,
+    }).setOrigin(0.5).setScrollFactor(0);
+    this.add.text(W/2, H/2 + 4*RES, `Time: ${fmtTime(this.raceTime)}`, {
+      fontFamily: 'monospace', fontSize: fs(13),
+      color: '#ffffff', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5).setScrollFactor(0);
+    this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 for leaderboard', {
+      fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
+      stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5).setScrollFactor(0);
 
-      this.add.rectangle(W/2, H/2, 240*RES, 92*RES, 0x0a1828, 230).setScrollFactor(0);
-      this.add.text(W/2, H/2 - 22*RES, '🦀  FINISH!  🦀', {
-        fontFamily: 'monospace', fontSize: fs(20),
-        color: '#e8e030', stroke: '#000', strokeThickness: 4,
-      }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 4*RES, `Time: ${timeStr}`, {
-        fontFamily: 'monospace', fontSize: fs(13),
-        color: '#ffffff', stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0);
-      this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 for leaderboard', {
-        fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
-        stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0);
-
-      this.time.delayedCall(400, () => {
-        this.input.once('pointerdown', () => this.scene.restart());
-        this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
-      });
-    }
+    this.time.delayedCall(400, () => {
+      this.input.once('pointerdown', () => this.scene.restart());
+      this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+    });
   }
 
-  // ── onOtherWin ──────────────────────────────────────────────────────────────
-  onOtherWin(name) {
+  // ── onFinish (multiplayer, my crab) ─────────────────────────────────────────
+  // My crab crossed the line. The race continues for everyone still going, so we
+  // just lock my controls and show my place — the final screen waits for race-over.
+  onFinish(place, finishTimeCs) {
     if (this.won) return;
     this.won = true;
+    this.crab?.stop?.();
+    this.crab?.setFrame?.(0);
+    if (this.timerEvent) this.timerEvent.remove();
+    if (Number.isFinite(finishTimeCs)) this.timerText.setText(fmtTime(finishTimeCs));
+
+    // Record my finish on the shared leaderboard (server-authoritative time).
+    const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
+    const timeCs = Number.isFinite(finishTimeCs) ? finishTimeCs : this.raceTime;
+    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '');
+
+    this.statusText.setColor('#e8e030');
+    this.statusText.setText(`🦀 FINISHED ${ordinal(place)} — waiting for the rest…`);
+  }
+
+  // ── onOtherFinish (multiplayer, another crab) ───────────────────────────────
+  onOtherFinish(name, place) {
+    if (this.raceOver) return;
+    this.statusText.setColor('#7ec8e3');
+    this.statusText.setText(`${name} finished ${ordinal(place)}`);
+    this.time.delayedCall(1800, () => {
+      if (!this.raceOver && this.statusText.text.startsWith(name)) this.statusText.setText('');
+    });
+  }
+
+  // ── startDnfCountdown ───────────────────────────────────────────────────────
+  // First crab finished → the field has `ms` to reach the line. Tick a banner down
+  // so the stragglers see the pressure. The server owns the real cutoff.
+  startDnfCountdown(ms) {
+    if (this.raceOver || this.dnfEvent) return;
+    let remaining = Math.ceil(ms / 1000);
+    const render = () => {
+      if (this.raceOver) return;
+      this.dnfText.setText(remaining > 0 ? `⏱ ${remaining}s to finish!` : '');
+    };
+    render();
+    this.dnfEvent = this.time.addEvent({
+      delay: 1000, repeat: remaining - 1,
+      callback: () => { remaining--; render(); },
+    });
+  }
+
+  // ── onRaceOver (multiplayer) ────────────────────────────────────────────────
+  // Everyone finished or the DNF window closed. Freeze the race and show the
+  // final standings: finishers with times/places, then any DNF crabs.
+  onRaceOver(results) {
+    if (this.raceOver) return;
+    this.raceOver = true;
+    this.won = true; // lock input
+    if (this.timerEvent) this.timerEvent.remove();
+    if (this.dnfEvent)   { this.dnfEvent.remove(); this.dnfEvent = null; }
+    this.dnfText.setText('');
+    this.statusText.setText('');
+
+    const rows = Array.isArray(results) ? results : [];
     const { width: W, height: H } = this.scale;
-    this.add.rectangle(W/2, H/2, 260*RES, 80*RES, 0x200808, 230).setScrollFactor(0);
-    this.add.text(W/2, H/2 - 16*RES, `🦀 ${name} WINS!`, {
-      fontFamily: 'monospace', fontSize: fs(18),
-      color: '#e05050', stroke: '#000', strokeThickness: 4,
+
+    const rowH   = 14;
+    const panelH = 44 + rows.length * rowH;
+    this.add.rectangle(W/2, H/2, 300*RES, panelH*RES, 0x0a1828, 235).setScrollFactor(0);
+    this.add.text(W/2, H/2 - (panelH/2 - 10)*RES, '🏁  RESULTS  🏁', {
+      fontFamily: 'monospace', fontSize: fs(16),
+      color: '#e8e030', stroke: '#000', strokeThickness: 4,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 16*RES, 'tap 🏠 Home for the leaderboard', {
-      fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
+
+    let y = H/2 - (panelH/2 - 28)*RES;
+    for (const r of rows) {
+      const hex   = PALETTE_HEX[r.colorIdx] || PALETTE_HEX[0];
+      const isMe  = r.id === myPlayerId;
+      const rank  = r.dnf ? 'DNF' : ordinal(r.place);
+      const time  = r.dnf ? '—' : fmtTime(r.finishTimeCs);
+      const label = `${rank.padEnd(4)} ${String(r.name).slice(0,12).padEnd(12)} ${time}`;
+      this.add.text(W/2, y, label, {
+        fontFamily: 'monospace', fontSize: fs(11),
+        color: r.dnf ? '#888' : hex,
+        stroke: '#000', strokeThickness: isMe ? 4 : 3,
+      }).setOrigin(0.5).setScrollFactor(0);
+      y += rowH * RES;
+    }
+
+    this.add.text(W/2, H/2 + (panelH/2 - 8)*RES, 'tap 🏠 Home for the leaderboard', {
+      fontFamily: 'monospace', fontSize: fs(10), color: '#7ec8e3',
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
   }

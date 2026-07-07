@@ -165,6 +165,9 @@ const DEFAULT_GAME_CONFIG = {
   lanes: 3,
   obstacleDensity: 0.38,
   obstacleStartCell: 6,
+  // Once the first crab finishes, everyone else has this many seconds to reach
+  // the line before the race ends and the stragglers are recorded as DNF.
+  dnfTimeoutSecs: 15,
   zones: [
     { tile: 'shore',       len: 5  },
     { tile: 'wetSand',     len: 8  },
@@ -204,6 +207,7 @@ const GAME_CONFIG = loadGameConfig();
 // client can't hang the server with e.g. lanes: 1e9 or a 1e9-cell track.
 const LANE_MIN = 1,  LANE_MAX = 12;
 const LEN_MIN  = 10, LEN_MAX  = 200;
+const DNF_MIN  = 3,  DNF_MAX  = 120; // seconds the field gets after the first finish
 
 // Scale a base zone list's lengths proportionally to hit `targetLen` total cells,
 // preserving the tile sequence. Each zone keeps at least 1 cell; rounding drift
@@ -251,10 +255,16 @@ function buildRoomConfig(overrides = {}) {
     if (filtered.length) obstacleKinds = filtered;
   }
 
+  // dnfTimeoutSecs: seconds the field gets to finish after the first crab wins,
+  // clamped to a sane range; bad/missing → default.
+  let dnfTimeoutSecs = Number(o.dnfTimeoutSecs);
+  if (!Number.isFinite(dnfTimeoutSecs)) dnfTimeoutSecs = GAME_CONFIG.dnfTimeoutSecs ?? 15;
+  dnfTimeoutSecs = Math.max(DNF_MIN, Math.min(DNF_MAX, dnfTimeoutSecs));
+
   const totalCells = zones.reduce((s, z) => s + z.len, 0);
   const finishCell = totalCells - zones[zones.length - 1].len;
   return {
-    lanes, zones, obstacleKinds, totalCells, finishCell,
+    lanes, zones, obstacleKinds, totalCells, finishCell, dnfTimeoutSecs,
     obstacleStartCell: GAME_CONFIG.obstacleStartCell,
     obstacleDensity:   GAME_CONFIG.obstacleDensity,
   };
@@ -269,6 +279,7 @@ function configForClient(config) {
     obstacleKinds: config.obstacleKinds,
     obstacleStartCell: config.obstacleStartCell,
     obstacleDensity: config.obstacleDensity,
+    dnfTimeoutSecs: config.dnfTimeoutSecs,
   };
 }
 
@@ -396,6 +407,9 @@ function makeRoom(id, seed, config) {
   return {
     id, players: new Map(), started: false, finished: false, locked: false,
     hostId: null, lockTimer: null, seed, config, obsMap: map, obstacles,
+    // Race timing / finish tracking. startedAt is stamped when the 'go' fires,
+    // so finish times are measured server-side from a single authoritative clock.
+    startedAt: null, dnfTimer: null, finishCount: 0,
   };
 }
 
@@ -410,14 +424,17 @@ function makePlayer(id, name, colorIdx, lanes) {
     id, name, colorIdx,
     cell: 0, lane: colorIdx % lanes,
     stunTurns: 0, won: false,
+    // Filled in when the crab crosses the line: finishTimeCs = race time in
+    // centiseconds, place = 1-based finishing order. DNF crabs keep both null.
+    finishTimeCs: null, place: null,
   };
 }
 
 /** Serialisable snapshot of all players in a room */
 function snapshot(room) {
   return [...room.players.values()].map(
-    ({ id, name, colorIdx, cell, lane, stunTurns, won }) =>
-      ({ id, name, colorIdx, cell, lane, stunTurns, won })
+    ({ id, name, colorIdx, cell, lane, stunTurns, won, finishTimeCs, place }) =>
+      ({ id, name, colorIdx, cell, lane, stunTurns, won, finishTimeCs, place })
   );
 }
 
@@ -435,7 +452,7 @@ function sendTo(ws, msg) {
 /** Server-authoritative move application. Returns a result object. */
 function applyMove(room, playerId, dx, dlane) {
   const p = room.players.get(playerId);
-  if (!p || p.won || !room.started) return { ok: false };
+  if (!p || p.won || !room.started || room.finished) return { ok: false };
 
   // Consume a stun turn instead of moving
   if (p.stunTurns > 0) {
@@ -465,9 +482,57 @@ function applyMove(room, playerId, dx, dlane) {
     effect = { type: 'push', msg: obs.msg };
   }
 
-  if (p.cell >= room.config.finishCell) { p.won = true; room.finished = true; }
+  if (p.cell >= room.config.finishCell && !p.won) {
+    p.won = true;
+    p.place = ++room.finishCount;
+    p.finishTimeCs = raceTimeCs(room);
+  }
 
-  return { ok: true, effect, won: p.won };
+  return { ok: true, effect, won: p.won, place: p.place, finishTimeCs: p.finishTimeCs };
+}
+
+/** Race time in centiseconds since the 'go', from the server's authoritative
+ *  clock. 0 if the race hasn't started (shouldn't happen for a valid move). */
+function raceTimeCs(room) {
+  if (!room.startedAt) return 0;
+  return Math.round((Date.now() - room.startedAt) / 10);
+}
+
+/** Everyone who's still racing is marked DNF; the race is closed out and a final
+ *  results message is broadcast. Idempotent — a second call is a no-op. */
+function endRace(room, roomId) {
+  if (room.finished) return;
+  room.finished = true;
+  if (room.dnfTimer) { clearTimeout(room.dnfTimer); room.dnfTimer = null; }
+
+  // Anyone who hasn't crossed the line is a DNF: leave finishTimeCs/place null.
+  const results = [...room.players.values()]
+    .map(({ id, name, colorIdx, finishTimeCs, place }) =>
+      ({ id, name, colorIdx, finishTimeCs, place, dnf: place == null }))
+    // Finishers first (by place), then DNF crabs.
+    .sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity));
+
+  broadcast(roomId, { type: 'race-over', results });
+}
+
+/** Called when a crab finishes. Starts the DNF countdown on the first finish,
+ *  and ends the race immediately once every player has finished. */
+function onFinish(room, roomId) {
+  // First finisher opens the DNF window for the rest of the field.
+  if (!room.dnfTimer && !room.finished) {
+    const ms = (room.config.dnfTimeoutSecs ?? 15) * 1000;
+    room.dnfTimer = setTimeout(() => endRace(room, roomId), ms);
+    broadcast(roomId, { type: 'dnf-window', ms });
+  }
+  // Everyone home → end now rather than waiting out the timer.
+  if (allFinished(room)) endRace(room, roomId);
+}
+
+/** True when every player currently in the room has crossed the line. False for
+ *  an empty room (nobody to finish). */
+function allFinished(room) {
+  return room.players.size > 0 &&
+    [...room.players.values()].every(p => p.won);
 }
 
 /** 3-2-1 countdown, then broadcast 'go' */
@@ -479,6 +544,7 @@ function startCountdown(room, roomId) {
     broadcast(roomId, { type: 'countdown', count });
     if (count-- <= 0) {
       clearInterval(tick);
+      room.startedAt = Date.now(); // authoritative race clock start
       broadcast(roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
     }
   }, 1000);
@@ -567,14 +633,17 @@ async function main() {
         movedId:  event.playerId,
       });
 
-      // Announce winner
-      if (result.won) {
+      // Announce each crab as it finishes (the race keeps going for the rest).
+      if (result.won && result.place != null) {
         const p = room.players.get(event.playerId);
         broadcast(event.roomId, {
-          type:     'win',
-          playerId: event.playerId,
-          name:     p?.name ?? '?',
+          type:         'finish',
+          playerId:     event.playerId,
+          name:         p?.name ?? '?',
+          place:        result.place,
+          finishTimeCs: result.finishTimeCs,
         });
+        onFinish(room, event.roomId);
       }
     },
   });
@@ -691,6 +760,7 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
         room.started = true;
+        room.startedAt = Date.now();
         lockLobby(room);
         broadcast(info.roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
       }
@@ -716,8 +786,14 @@ async function main() {
             playerId: info.playerId,
             players:  snapshot(room),
           });
+          // A leaver could be the last un-finished crab — if everyone still here
+          // has finished, close the race out instead of waiting on the DNF timer.
+          if (room.started && !room.finished && allFinished(room)) {
+            endRace(room, info.roomId);
+          }
           if (room.players.size === 0) {
             if (room.lockTimer) clearTimeout(room.lockTimer);
+            if (room.dnfTimer)  clearTimeout(room.dnfTimer);
             rooms.delete(info.roomId);
             console.log(`[room:${info.roomId}] closed (empty)`);
           }
