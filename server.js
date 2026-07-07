@@ -43,6 +43,14 @@ function postLeaderboard(req, res) {
     if (raw.length > 1024) req.destroy(); // tiny payload — reject anything bigger
   });
   req.on('end', async () => {
+    // Flood guard: cap leaderboard writes per client IP. Behind a proxy, honour
+    // X-Forwarded-For's first hop; otherwise the socket address.
+    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+               || req.socket.remoteAddress || 'unknown';
+    if (!await rateLimit(`rl:lb:${ip}`, RL_LB_LIMIT, RL_LB_WINDOW_SECS)) {
+      return sendJson(res, 429, { error: 'rate limited' });
+    }
+
     let body;
     try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'bad json' }); }
     const name     = String(body.name || 'Crab').slice(0, 20);
@@ -352,6 +360,34 @@ function buildObstacles(seed, config) {
 // One redis client, connected in main(). If Valkey is unreachable the game still
 // works — the leaderboard just silently no-ops rather than taking the server down.
 let valkey = null;
+
+// ── Valkey-backed rate limiting ─────────────────────────────────────────────────
+// Rate limits live in Valkey (not in-process) so they hold ACROSS instances: room
+// and client state here is per-process, so an in-memory limiter would be per-pod
+// and trivially bypassed by reconnecting to another instance behind a load
+// balancer. See docs/blog/rate-limiting-with-valkey.md.
+//
+// Per-caller limits (fixed window). Tuned generously — these are flood ceilings,
+// not gameplay pacing.
+const RL_MOVE_LIMIT = 20, RL_MOVE_WINDOW_SECS = 1;   // moves per player per second
+const RL_LB_LIMIT   = 5,  RL_LB_WINDOW_SECS   = 60;  // leaderboard POSTs per IP per minute
+
+/** Fixed-window rate limit backed by Valkey. Returns true if the action is
+ *  allowed, false if the caller is over `limit` within `windowSecs`.
+ *  Fails OPEN when Valkey isn't ready — a Valkey blip must never stop gameplay
+ *  (matches the leaderboard's degrade-don't-crash behaviour). Keys are prefixed
+ *  `rl:` and always carry a TTL so they expire on their own. */
+async function rateLimit(key, limit, windowSecs) {
+  if (valkey?.status !== 'ready') return true; // fail open
+  try {
+    const n = await valkey.incr(key);
+    if (n === 1) await valkey.expire(key, windowSecs); // first hit starts the window
+    return n <= limit;
+  } catch (err) {
+    console.error('[valkey] rateLimit error:', err.message);
+    return true; // fail open on error too
+  }
+}
 
 /** True when `timeCs` is a plausible finish time (positive, in range). Rejects
  *  the values that would corrupt the board — non-positive (unbeatable via the
@@ -730,6 +766,11 @@ async function main() {
       if (msg.type === 'move') {
         const info = clients.get(ws);
         if (!info) return;
+
+        // Flood guard: drop moves once a player exceeds the per-second ceiling.
+        // Silent drop (no error) — a legit fast tapper just loses the overflow.
+        if (!await rateLimit(`rl:move:${info.playerId}`, RL_MOVE_LIMIT, RL_MOVE_WINDOW_SECS)) return;
+
         const { dx = 0, dlane = 0 } = msg;
 
         // Publish to Kafka — the consumer will apply the move and broadcast state
