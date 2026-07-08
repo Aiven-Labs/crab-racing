@@ -3,6 +3,13 @@
 *A design for recording races and playing them back, built on the Kafka move
 log we already produce.*
 
+> **Status: implemented** (server + chaos-runner verifier). Steps 1–4 and 6 of
+> the work breakdown below are done. Step 5 (the browser watch UI in game.html)
+> is not yet built — the server surface (`watch` WS message → `replay:true`
+> frames) is ready for a client to consume. Finish times are reproduced exactly
+> by recording the authoritative `finishTimeCs` onto the finishing move rather
+> than recomputing it from a replay clock (see the timing note in step 2).
+
 ## Goal
 
 Let a finished race be replayed move-for-move: the crabs re-crawl the identical
