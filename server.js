@@ -14,6 +14,7 @@ require('dotenv').config();
 const http      = require('http');
 const fs        = require('fs');
 const path      = require('path');
+const crypto    = require('crypto');
 const WebSocket = require('ws');
 const { Kafka } = require('kafkajs');
 const Valkey    = require('iovalkey');
@@ -62,7 +63,10 @@ function postLeaderboard(req, res) {
     // The obstacle seed the race was run on — kept so a board entry can be
     // replayed on the identical track. May be absent from older clients.
     const seed     = body.seed != null ? String(body.seed).slice(0, 32) : '';
-    await recordScore(name, timeCs, colorIdx, seed);
+    // The raceId of the run, so a board row links to its replay. UUID-shaped;
+    // absent from older clients. Bounded like the other fields.
+    const raceId   = body.raceId != null ? String(body.raceId).slice(0, 64) : '';
+    await recordScore(name, timeCs, colorIdx, seed, raceId);
     sendJson(res, 200, await getLeaderboard());
   });
 }
@@ -158,6 +162,12 @@ const LB_COLOR_KEY = 'leaderboard:colors'; // hash: name → crab colorIdx
 const LB_SEED_KEY  = 'leaderboard:seeds';  // hash: name → obstacle seed for that run
 const LB_MAX      = 10;                    // keep only the top N
 const LB_TTL_SECS = 60 * 60;               // ephemeral: whole board expires after 1h idle
+const LB_RACE_KEY = 'leaderboard:races';   // hash: name → raceId of their best run
+// Replay records: race:<raceId> holds the full recorded race (seed, config,
+// roster, move stream). Kept longer than the board so a board link stays
+// watchable for a while after the run.
+const RACE_KEY_PREFIX = 'race:';
+const RACE_TTL_SECS   = 24 * 60 * 60;      // replays live 24h
 // A finish time must be a positive centisecond count within a sane range. This
 // bounds untrusted input: a non-positive time would (via the negated score +
 // GT) pin an unbeatable top entry, and an absurd time is clearly bogus. Ceiling
@@ -316,6 +326,25 @@ function configForClient(config) {
   };
 }
 
+// Inverse of configForClient: rebuild a full server-side room config (with the
+// derived totalCells / finishCell that applyMove and makeRoom need) from the
+// client-shaped config stored in a replay record. Missing fields fall back to
+// the server default so an old/partial record still reconstructs a track.
+function configFromStored(stored = {}) {
+  const zones = Array.isArray(stored.zones) && stored.zones.length ? stored.zones : GAME_CONFIG.zones;
+  const totalCells = zones.reduce((s, z) => s + z.len, 0);
+  const finishCell = totalCells - zones[zones.length - 1].len;
+  return {
+    lanes:             stored.lanes             ?? GAME_CONFIG.lanes,
+    zones,
+    obstacleKinds:     stored.obstacleKinds     ?? GAME_CONFIG.obstacleKinds,
+    obstacleStartCell: stored.obstacleStartCell ?? GAME_CONFIG.obstacleStartCell,
+    obstacleDensity:   stored.obstacleDensity   ?? GAME_CONFIG.obstacleDensity,
+    dnfTimeoutSecs:    stored.dnfTimeoutSecs    ?? GAME_CONFIG.dnfTimeoutSecs,
+    totalCells, finishCell,
+  };
+}
+
 // Obstacles are placed procedurally from a per-room seed so every race gets a
 // fresh but fair layout. This server is authoritative: it picks the seed (or
 // honours a custom one from the joining player) and ships it to every client so
@@ -377,6 +406,11 @@ function buildObstacles(seed, config) {
 // works — the leaderboard just silently no-ops rather than taking the server down.
 let valkey = null;
 
+// The Kafka client, set in main(). Exposed at module scope so the replay
+// fallback (loadRaceFromKafka) can spin up a throwaway consumer to reconstruct
+// a race from the durable log when Valkey doesn't have it.
+let kafka = null;
+
 // ── Valkey-backed rate limiting ─────────────────────────────────────────────────
 // Rate limits live in Valkey (not in-process) so they hold ACROSS instances: room
 // and client state here is per-process, so an in-memory limiter would be per-pod
@@ -414,8 +448,9 @@ function isValidTimeCs(timeCs) {
 
 /** Record a finish. `timeCs` = race time in centiseconds (lower is better);
  *  `colorIdx` = which crab palette (0–3) the player raced as;
- *  `seed` = the obstacle seed the run was raced on (for replay). */
-async function recordScore(name, timeCs, colorIdx, seed = '') {
+ *  `seed` = the obstacle seed the run was raced on (for replay);
+ *  `raceId` = the recorded race this run belongs to (for the watch link). */
+async function recordScore(name, timeCs, colorIdx, seed = '', raceId = '') {
   if (valkey?.status !== 'ready' || !name || !isValidTimeCs(timeCs)) return;
   try {
     // Keep the player's *best* time only: GT means "update only if greater",
@@ -425,12 +460,16 @@ async function recordScore(name, timeCs, colorIdx, seed = '') {
     await valkey.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
     // Remember the seed the run was raced on. Skip when unknown so we don't
     // overwrite a real seed with an empty one from an older client.
-    if (seed) await valkey.hset(LB_SEED_KEY, name, seed);
+    if (seed)   await valkey.hset(LB_SEED_KEY, name, seed);
+    // Remember which recorded race this run was, so the board can link to a
+    // replay. Same skip-when-unknown rule as the seed.
+    if (raceId) await valkey.hset(LB_RACE_KEY, name, raceId);
     // Trim to the top LB_MAX (drop everything below rank LB_MAX).
     await valkey.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
     await valkey.expire(LB_KEY, LB_TTL_SECS);
     await valkey.expire(LB_COLOR_KEY, LB_TTL_SECS);
     await valkey.expire(LB_SEED_KEY, LB_TTL_SECS);
+    await valkey.expire(LB_RACE_KEY, LB_TTL_SECS);
   } catch (err) {
     console.error('[valkey] recordScore error:', err.message);
   }
@@ -444,6 +483,7 @@ async function getLeaderboard() {
     const flat   = await valkey.zrevrange(LB_KEY, 0, LB_MAX - 1, 'WITHSCORES');
     const colors = await valkey.hgetall(LB_COLOR_KEY); // { name: "colorIdx" }
     const seeds  = await valkey.hgetall(LB_SEED_KEY);  // { name: "seed" }
+    const races  = await valkey.hgetall(LB_RACE_KEY);  // { name: "raceId" }
     const board = [];
     for (let i = 0; i < flat.length; i += 2) {
       const name = flat[i];
@@ -452,12 +492,54 @@ async function getLeaderboard() {
         timeCs:   -Number(flat[i + 1]),
         colorIdx: Number(colors[name]) || 0,
         seed:     seeds[name] || '',
+        // raceId links a board row to its watchable replay (absent if the run
+        // predates replay support or the record has since expired).
+        raceId:   races[name] || '',
       });
     }
     return board;
   } catch (err) {
     console.error('[valkey] getLeaderboard error:', err.message);
     return [];
+  }
+}
+
+// ── replay records ─────────────────────────────────────────────────────────────
+// A recorded race is everything needed to reconstruct it deterministically:
+// seed + config rebuild the identical track, the starting roster rebuilds the
+// field, and the move stream is re-applied through applyMove. Stored in Valkey
+// (primary, survives Kafka retention); a Kafka scan is the fallback (see
+// loadRaceFromKafka). Degrade-don't-crash: any Valkey problem just means "no
+// replay", never a thrown error into gameplay.
+
+/** Persist a finished race so it can be replayed later. No-op if Valkey is down
+ *  or the race recorded no moves (nothing to watch). */
+async function saveRace(room) {
+  if (valkey?.status !== 'ready' || !room.raceId || !room.moves?.length) return;
+  const record = {
+    raceId:  room.raceId,
+    roomId:  room.id,
+    seed:    room.seed,
+    config:  configForClient(room.config),
+    players: room.startRoster || [],
+    moves:   room.moves,
+  };
+  try {
+    await valkey.set(RACE_KEY_PREFIX + room.raceId, JSON.stringify(record), 'EX', RACE_TTL_SECS);
+  } catch (err) {
+    console.error('[valkey] saveRace error:', err.message);
+  }
+}
+
+/** Fetch a recorded race by id, or null if not found / Valkey unavailable. */
+async function loadRace(raceId) {
+  if (valkey?.status !== 'ready' || !raceId) return null;
+  try {
+    const raw = await valkey.get(RACE_KEY_PREFIX + raceId);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.error('[valkey] loadRace error:', err.message);
+    return null;
   }
 }
 
@@ -478,6 +560,11 @@ function makeRoom(id, seed, config) {
     // Race timing / finish tracking. startedAt is stamped when the 'go' fires,
     // so finish times are measured server-side from a single authoritative clock.
     startedAt: null, dnfTimer: null, finishCount: 0,
+    // raceId is a per-race UUID stamped when the race actually begins (go/solo).
+    // It's the Kafka message key for this race's moves and the id a replay is
+    // fetched by. `moves` buffers the applied move stream so we can persist the
+    // whole race for replay when it ends. Both reset for each new race in a room.
+    raceId: null, moves: [],
   };
 }
 
@@ -581,6 +668,10 @@ function endRace(room, roomId) {
     .sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity));
 
   broadcast(roomId, { type: 'race-over', results });
+
+  // Persist the recorded move stream so this race can be replayed. Fire-and-
+  // forget: replay is a nice-to-have, never a reason to hold up race teardown.
+  saveRace(room);
 }
 
 /** Called when a crab finishes. Starts the DNF countdown on the first finish,
@@ -603,6 +694,19 @@ function allFinished(room) {
     [...room.players.values()].every(p => p.won);
 }
 
+/** Stamp the authoritative race clock and mint the per-race id at the moment a
+ *  race actually starts (the 'go'). A fresh raceId per race — the Kafka key for
+ *  this race's moves and the handle a replay is fetched by. Also snapshots the
+ *  starting roster so a replay can rebuild the field before applying moves. */
+function beginRace(room) {
+  room.startedAt = Date.now(); // authoritative race clock start
+  room.raceId    = crypto.randomUUID();
+  room.moves     = [];
+  // Frozen starting roster (before any move) — replay recreates players from this.
+  room.startRoster = [...room.players.values()].map(
+    ({ id, name, colorIdx, lane }) => ({ id, name, colorIdx, lane }));
+}
+
 /** 3-2-1 countdown, then broadcast 'go' */
 function startCountdown(room, roomId) {
   room.started = true;
@@ -612,10 +716,106 @@ function startCountdown(room, roomId) {
     broadcast(roomId, { type: 'countdown', count });
     if (count-- <= 0) {
       clearInterval(tick);
-      room.startedAt = Date.now(); // authoritative race clock start
-      broadcast(roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
+      beginRace(room);
+      broadcast(roomId, { type: 'go', raceId: room.raceId, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
     }
   }, 1000);
+}
+
+// ── replay ───────────────────────────────────────────────────────────────────────
+// Cap how much of the Kafka log the fallback will scan, and how long it waits,
+// so a replay request can never hang or read the whole topic unbounded.
+const REPLAY_SCAN_TIMEOUT_MS = 8000;
+
+/** Fallback race loader: scan the Kafka topic from the beginning and collect the
+ *  moves whose raceId matches. Returns the moves (ordered) or null on
+ *  timeout/failure. Only the moves are recoverable this way — seed/config/roster
+ *  aren't in the move stream — so this is a partial source used when Valkey has
+ *  no record. Best-effort; a throwaway consumer group so it doesn't disturb the
+ *  live one. */
+async function loadRaceFromKafka(raceId) {
+  if (!kafka || !raceId) return null;
+  const consumer = kafka.consumer({ groupId: `replay-${raceId}-${crypto.randomUUID()}` });
+  const moves = [];
+  try {
+    await consumer.connect();
+    await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
+    await new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); resolve(); };
+      // The scan has no natural end (Kafka is a stream), so stop after a quiet
+      // window / hard ceiling. Each matching message pushes the timeout out a
+      // little so an active backlog is drained before we give up.
+      let timer = setTimeout(done, REPLAY_SCAN_TIMEOUT_MS);
+      consumer.run({
+        eachMessage: async ({ message }) => {
+          let e; try { e = JSON.parse(message.value.toString()); } catch { return; }
+          if (e.action === 'move' && e.raceId === raceId) {
+            moves.push({ playerId: e.playerId, dx: e.dx, dlane: e.dlane, t: moves.length });
+            clearTimeout(timer); timer = setTimeout(done, 1500);
+          }
+        },
+      }).catch(() => done());
+    });
+  } catch (err) {
+    console.error('[replay] kafka scan error:', err.message);
+  } finally {
+    await consumer.disconnect().catch(() => {});
+  }
+  return moves.length ? moves : null;
+}
+
+/** Stream a recorded race to one watching socket as replay:true frames, reusing
+ *  the exact 'go' → 'state' → 'race-over' shape the live client already renders.
+ *  Moves are re-applied through the authoritative applyMove on a freshly rebuilt
+ *  room, so the replay reproduces the original race move-for-move. Playback runs
+ *  on a scaled version of the original cadence (`speed`), or as fast as the event
+ *  loop allows for the instant-result case. */
+async function playRace(ws, record, { speed = 1 } = {}) {
+  const config = configFromStored(record.config);
+  const room = makeRoom(`replay:${record.raceId}`, record.seed, config);
+  for (const p of (record.players || [])) {
+    room.players.set(p.id, makePlayer(p.id, p.name, p.colorIdx, config.lanes));
+    // Restore the exact starting lane the run used (makePlayer derives it from
+    // colorIdx, but the recorded roster is authoritative).
+    if (p.lane != null) room.players.get(p.id).lane = p.lane;
+  }
+  room.started = true;
+  room.startedAt = Date.now();
+
+  sendTo(ws, { type: 'go', replay: true, raceId: record.raceId, seed: record.seed,
+    config: configForClient(config), players: snapshot(room) });
+
+  let prevT = 0;
+  for (const m of record.moves) {
+    if (ws.readyState !== WebSocket.OPEN) return; // watcher left — stop
+    // Honour the original inter-move gap, scaled by speed. speed<=0 → instant.
+    const gap = speed > 0 ? Math.max(0, (m.t - prevT)) / speed : 0;
+    prevT = m.t;
+    if (gap) await new Promise(r => setTimeout(r, Math.min(gap, 2000)));
+
+    const result = applyMove(room, m.playerId, m.dx, m.dlane);
+    if (!result.ok && result.effect !== 'block') continue;
+    // The recorded finishTimeCs is authoritative (measured live); prefer it over
+    // recomputing from replay wall-clock. Overwrite the player's stamp too so the
+    // final race-over results carry the original times.
+    if (result.won && m.finishTimeCs != null) {
+      result.finishTimeCs = m.finishTimeCs;
+      const pl = room.players.get(m.playerId);
+      if (pl) pl.finishTimeCs = m.finishTimeCs;
+    }
+    sendTo(ws, { type: 'state', replay: true, players: snapshot(room), result, movedId: m.playerId });
+    if (result.won && result.place != null) {
+      const p = room.players.get(m.playerId);
+      sendTo(ws, { type: 'finish', replay: true, playerId: m.playerId,
+        name: p?.name ?? '?', place: result.place, finishTimeCs: result.finishTimeCs });
+    }
+  }
+
+  const results = [...room.players.values()]
+    .map(({ id, name, colorIdx, finishTimeCs, place }) =>
+      ({ id, name, colorIdx, finishTimeCs, place, dnf: place == null }))
+    .sort((a, b) => (a.place ?? Infinity) - (b.place ?? Infinity));
+  sendTo(ws, { type: 'race-over', replay: true, results });
 }
 
 // ── main ────────────────────────────────────────────────────────────────────────
@@ -633,7 +833,7 @@ async function main() {
       cert: readPem(KAFKA_ACCESS_CERT), // this client's public cert
     };
   }
-  const kafka = new Kafka(kafkaCfg);
+  kafka = new Kafka(kafkaCfg); // module-scoped so the replay fallback can reuse it
 
   // Valkey — connect via the single connection string. rediss:// URIs turn on
   // TLS automatically (that's what Aiven for Valkey hands you). lazyConnect lets
@@ -692,6 +892,22 @@ async function main() {
 
       const result = applyMove(room, event.playerId, event.dx, event.dlane);
       if (!result.ok && result.effect !== 'block') return; // truly invalid — skip
+
+      // Buffer the applied move for replay: only moves belonging to the room's
+      // current race, with an offset from the race start so playback can honour
+      // the original cadence. This is the exact input stream replay re-applies.
+      // When a move causes a finish, record the authoritative finishTimeCs on it
+      // so replay reports the exact recorded time rather than one recomputed from
+      // a reconstructed clock (which could round differently at a cs boundary).
+      if (event.raceId && event.raceId === room.raceId) {
+        const rec = {
+          playerId: event.playerId,
+          dx: event.dx, dlane: event.dlane,
+          t: room.startedAt ? Date.now() - room.startedAt : 0,
+        };
+        if (result.won && result.finishTimeCs != null) rec.finishTimeCs = result.finishTimeCs;
+        room.moves.push(rec);
+      }
 
       // Broadcast updated state + result to everyone in the room
       broadcast(event.roomId, {
@@ -787,15 +1003,24 @@ async function main() {
         // Silent drop (no error) — a legit fast tapper just loses the overflow.
         if (!await rateLimit(`rl:move:${info.playerId}`, RL_MOVE_LIMIT, RL_MOVE_WINDOW_SECS)) return;
 
+        // A move only counts once the race is live; that's also when raceId
+        // exists. No race → nothing to key on, so drop it (matches applyMove,
+        // which rejects moves before the race starts).
+        const room = rooms.get(info.roomId);
+        if (!room || !room.raceId) return;
+
         const { dx = 0, dlane = 0 } = msg;
 
-        // Publish to Kafka — the consumer will apply the move and broadcast state
+        // Publish to Kafka keyed on raceId so all of one race's moves share a
+        // partition (→ total order for that race) and consecutive races in the
+        // same room stay separable. raceId also rides in the value for replay.
         await producer.send({
           topic: TOPIC,
           messages: [{
-            key:   info.roomId,
+            key:   room.raceId,
             value: JSON.stringify({
               action:   'move',
+              raceId:   room.raceId,
               roomId:   info.roomId,
               playerId: info.playerId,
               dx, dlane,
@@ -833,9 +1058,31 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
         room.started = true;
-        room.startedAt = Date.now();
+        beginRace(room);
         lockLobby(room);
-        broadcast(info.roomId, { type: 'go', seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
+        broadcast(info.roomId, { type: 'go', raceId: room.raceId, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
+      }
+
+      // ── watch: stream a recorded race back to this socket ───────────────────
+      // A spectator socket — it never joins a room. Loads the race from Valkey
+      // (primary) and streams replay:true frames. If only the Kafka fallback has
+      // it, we can replay moves but not the seed/config/roster, so we require the
+      // Valkey record for a faithful replay and report unavailable otherwise.
+      if (msg.type === 'watch') {
+        const raceId = String(msg.raceId || '').slice(0, 64);
+        const speed  = Number(msg.speed);
+        const record = await loadRace(raceId);
+        if (!record) {
+          // Note whether the moves at least exist in Kafka, for diagnostics.
+          const kMoves = await loadRaceFromKafka(raceId);
+          sendTo(ws, { type: 'replay-unavailable', raceId,
+            reason: kMoves ? 'record expired (moves in kafka only)' : 'not found' });
+          return;
+        }
+        playRace(ws, record, { speed: Number.isFinite(speed) ? speed : 1 })
+          .catch(err => { console.error('[replay] playRace error:', err.message);
+            sendTo(ws, { type: 'replay-unavailable', raceId, reason: 'playback error' }); });
+        return;
       }
     });
 

@@ -18,6 +18,9 @@
  *   --duration <secs>        hard stop after N seconds  (default 60)
  *   --rooms <n>              spread bots over N rooms    (default 1)
  *   --out <prefix>           write <prefix>.log + <prefix>.json report
+ *   --replay                 after racing, watch each race's replay and verify
+ *                            it reproduces the same finish order/times
+ *   --speed <n>              replay playback speed (0=instant, 1=realtime)
  *   --quiet                  only print summary + errors
  *
  * Requires the server (node server.js) plus its Kafka + Valkey to be up, e.g.
@@ -45,6 +48,8 @@ function parseArgs(argv) {
     duration: 60,
     rooms: 1,
     out: null,
+    replay: false,
+    speed: 0,     // replay playback speed; 0 = instant (verification default)
     quiet: false,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -59,6 +64,8 @@ function parseArgs(argv) {
       case '--duration': opts.duration = Number(next()); break;
       case '--rooms':    opts.rooms = Number(next()); break;
       case '--out':      opts.out = next(); break;
+      case '--replay':   opts.replay = true; break;
+      case '--speed':    opts.speed = Number(next()); break;
       case '--quiet':    opts.quiet = true; break;
       case '--help': case '-h':
         console.log(fs.readFileSync(__filename, 'utf8')
@@ -106,6 +113,10 @@ const stats = {
 
 const log = OPTS.quiet ? () => {} : (...a) => console.log(...a);
 
+// raceId → { roomId, results } captured live during the run, so the optional
+// --replay pass can watch each race back and assert it reproduces these.
+const races = new Map();
+
 // Optional error log stream (--out). Opened lazily on first error so a clean run
 // with --out still writes an (empty-error) .json report but no stray .log churn.
 let logStream = null;
@@ -149,6 +160,7 @@ class Racer {
     this.prevCell = -1;   // cell at the previous move
     this.stalled = 0;     // consecutive moves that didn't advance our cell
     this.maxCell = 0;     // furthest cell reached (diagnostic: spot wedged bots)
+    this.raceId = null;   // set from the 'go' frame — used by --replay verify
   }
 
   connect() {
@@ -225,6 +237,7 @@ class Racer {
       case 'go':
         this.config = msg.config || this.config;
         this.lanes = (this.config && this.config.lanes) || this.lanes;
+        this.raceId = msg.raceId || this.raceId; // for --replay verification
         this.startRacing();
         break;
 
@@ -241,6 +254,11 @@ class Racer {
         if (!this.done) {
           const me = (msg.results || []).find(r => r.id === this.playerId);
           if (me && me.dnf) { stats.dnf++; log(`  💤 [${this.name}] DNF`); }
+        }
+        // Capture the authoritative final results once per race (keyed by
+        // raceId), so --replay can later assert the replay reproduces them.
+        if (this.raceId && !races.has(this.raceId)) {
+          races.set(this.raceId, { roomId: this.roomId, results: msg.results || [] });
         }
         this.done = true;
         this.stopRacing();
@@ -445,8 +463,65 @@ function finish(racers) {
     if (logStream) logStream.end();
   }
 
+  // Optional replay verification: watch each recorded race back and assert it
+  // reproduces the same finish order/times. Runs after the summary, then exits.
+  if (OPTS.replay) {
+    verifyReplays().then(() => setTimeout(() => process.exit(0), 300));
+    return;
+  }
+
   // Give sockets a beat to close, then exit.
   setTimeout(() => process.exit(0), 300);
+}
+
+/** Open a spectator socket, watch one race's replay, and collect the replayed
+ *  finish results (place/time per finisher). Resolves to the results array, or
+ *  null on unavailable/timeout. */
+function watchReplay(raceId) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(OPTS.url);
+    const finals = [];
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; try { ws.close(); } catch {} resolve(v); };
+    const timer = setTimeout(() => done(finals.length ? finals : null), 15000);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'watch', raceId, speed: OPTS.speed })));
+    ws.on('message', (raw) => {
+      let m; try { m = JSON.parse(raw); } catch { return; }
+      if (m.type === 'finish') finals.push({ id: m.playerId, place: m.place, finishTimeCs: m.finishTimeCs });
+      if (m.type === 'replay-unavailable') { clearTimeout(timer); done({ unavailable: m.reason }); }
+      if (m.type === 'race-over') { clearTimeout(timer); done(m.results || finals); }
+    });
+    ws.on('error', () => done(null));
+  });
+}
+
+/** Compare live finish results against replayed ones. The replay must reproduce
+ *  the same finishers in the same order at the same times. */
+function compareResults(live, replay) {
+  const lf = (live || []).filter(r => !r.dnf && r.place != null).sort((a, b) => a.place - b.place);
+  const rf = (replay || []).filter(r => r.place != null).sort((a, b) => a.place - b.place);
+  if (lf.length !== rf.length) return `finisher count ${lf.length}≠${rf.length}`;
+  for (let i = 0; i < lf.length; i++) {
+    if (lf[i].id !== rf[i].id) return `place ${i + 1}: ${lf[i].id}≠${rf[i].id}`;
+    if (lf[i].finishTimeCs !== rf[i].finishTimeCs) return `${lf[i].id} time ${lf[i].finishTimeCs}≠${rf[i].finishTimeCs}cs`;
+  }
+  return null; // match
+}
+
+async function verifyReplays() {
+  console.log(`\n──────── replay verification (${races.size} race${races.size === 1 ? '' : 's'}) ────────`);
+  if (!races.size) { console.log('  (no completed races captured to replay)'); return; }
+  let pass = 0, fail = 0;
+  for (const [raceId, rec] of races) {
+    const replay = await watchReplay(raceId);
+    if (!replay) { console.log(`  ✗ ${raceId.slice(0, 8)} — no replay response`); fail++; continue; }
+    if (replay.unavailable) { console.log(`  ✗ ${raceId.slice(0, 8)} — unavailable: ${replay.unavailable}`); fail++; continue; }
+    const diff = compareResults(rec.results, replay);
+    if (diff) { console.log(`  ✗ ${raceId.slice(0, 8)} — mismatch: ${diff}`); fail++; }
+    else { console.log(`  ✓ ${raceId.slice(0, 8)} — replay matches (${replay.filter(r => r.place != null).length} finishers)`); pass++; }
+  }
+  console.log(`  ${pass} passed / ${fail} failed`);
+  console.log('──────────────────────────────────────────');
 }
 
 main();
