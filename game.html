@@ -1494,11 +1494,12 @@ class RaceScene extends Phaser.Scene {
       color: '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
 
+    let shareBtn = null;
     if (!watching) {
       // Share-replay button: packs the whole race into a portable #replay link
       // that replays on any instance (see soloReplayShareUrl).
       const soloMoves = this.soloMoves || [];
-      const shareBtn = this.add.text(W/2, H/2 + (panelH/2 - 34)*RES, '📋 Share replay', {
+      shareBtn = this.add.text(W/2, H/2 + (panelH/2 - 34)*RES, '📋 Share replay', {
         fontFamily: 'monospace', fontSize: fs(12),
         color: '#7ec8e3', backgroundColor: '#16283c',
         padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
@@ -1520,10 +1521,16 @@ class RaceScene extends Phaser.Scene {
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
 
-    // Only a live race restarts on tap; a replay just sits on the results.
+    // Only a live race restarts on tap; a replay just sits on the results. Guard
+    // the tap-anywhere restart so a tap ON the Share button copies the link
+    // instead of restarting (the scene-level pointerdown otherwise fires first
+    // and tears the scene down before the button's pointerup runs).
     if (!watching) {
       this.time.delayedCall(400, () => {
-        this.input.once('pointerdown', () => this.scene.restart());
+        this.input.on('pointerdown', (pointer, currentlyOver) => {
+          if (shareBtn && currentlyOver && currentlyOver.includes(shareBtn)) return;
+          this.scene.restart();
+        });
         this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
       });
     }
