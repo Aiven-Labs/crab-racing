@@ -89,6 +89,13 @@
   }
   #lb-list .lb-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lb-list .lb-time { flex: 0 0 auto; color: #7ec8e3; font-variant-numeric: tabular-nums; }
+  #lb-list .lb-watch {
+    flex: 0 0 auto; width: 20px; height: 18px; padding: 0; line-height: 1;
+    background: #16283c; border: 1px solid #2a5070; border-radius: 3px;
+    color: #7ec8e3; font-size: 10px; cursor: pointer;
+  }
+  #lb-list .lb-watch:hover { background: #234; color: #e8d030; border-color: #e8d030; }
+  #lb-list .lb-watch-gap { flex: 0 0 auto; width: 20px; } /* keep rows aligned */
   #lb-empty { font-size: 12px; color: #567; }
 
   /* ── How-to-play modal ─────────────────────────────── */
@@ -235,6 +242,7 @@ let multiPlayers = [];    // player list received with 'go' message
 let gameScene    = null;  // set by RaceScene.create()
 let isHost       = false; // true when this client created the lobby (may start it)
 let lobbyLocked  = false; // true once the lobby stops accepting new joiners
+let replayMode   = false; // true while watching a recorded race (spectator, no input)
 
 const CRAB_PALETTES = [
   ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
@@ -704,6 +712,12 @@ function handleServerMsg(msg) {
     case 'error':
       setStatus(`⚠ ${msg.msg}`);
       break;
+    case 'replay-unavailable':
+      // The recorded race couldn't be loaded (expired, or never recorded).
+      setStatus(`⚠ Replay unavailable: ${msg.reason || 'not found'}`);
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      replayMode = false;
+      break;
   }
 }
 
@@ -782,13 +796,18 @@ function renderLeaderboard(board) {
     return;
   }
   if (empty) empty.style.display = 'none';
-  list.innerHTML = board.map(row => {
+  list.innerHTML = board.map((row, i) => {
     const hex = PALETTE_HEX[row.colorIdx] || PALETTE_HEX[0];
     // Expose the seed as a hover title so a run can be replayed on the same track.
     const seedTitle = row.seed ? ` title="seed: ${escapeHtml(row.seed)}"` : '';
+    // A watchable run has a recorded raceId — show a ▶ button that streams the
+    // replay. Rows without one (older runs / expired records) just omit it.
+    const watchBtn = row.raceId
+      ? `<button class="lb-watch" data-race="${escapeHtml(row.raceId)}" title="Watch this run">▶</button>`
+      : '<span class="lb-watch-gap"></span>';
     return `<li${seedTitle}><span class="lb-swatch" style="background:${hex}"></span>` +
            `<span class="lb-name" style="color:${hex}">${escapeHtml(row.name)}</span>` +
-           `<span class="lb-time">${fmtTime(row.timeCs)}</span></li>`;
+           `<span class="lb-time">${fmtTime(row.timeCs)}</span>${watchBtn}</li>`;
   }).join('');
 }
 
@@ -846,6 +865,27 @@ function joinMulti() {
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
 }
 
+// Watch a recorded race. Opens a spectator WebSocket and asks the server to
+// stream the race back with `watch`. The replay arrives as the same
+// go/state/finish/race-over frames a live multiplayer race uses, so the existing
+// render path handles it — we just run as a spectator (myPlayerId stays null, so
+// no crab is "mine", input is ignored, and nothing is submitted to the board).
+function startReplay(raceId, speed = 1) {
+  if (!raceId) return;
+  const wsUrl = $id('ws-url').value.trim() || defaultWsUrl();
+  replayMode  = true;
+  multiPlayers = [];
+  myPlayerId   = null; // spectator — no controllable crab
+  $id('lobby').classList.add('hidden');
+  setStatus('Loading replay…');
+  try { ws = new WebSocket(wsUrl); }
+  catch (e) { setStatus(`Bad URL: ${e.message}`); replayMode = false; return; }
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'watch', raceId, speed }));
+  ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
+  ws.onerror   = ()  => { setStatus('Connection failed — is the server running?'); replayMode = false; };
+  ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Replay ended'); };
+}
+
 function startGame(isMulti) {
   multiMode = isMulti;
   $id('btn-home').classList.remove('hidden');
@@ -873,6 +913,7 @@ function goHome() {
   multiMode   = false;
   isHost      = false;
   lobbyLocked = false;
+  replayMode  = false;
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
   $id('btn-start').classList.add('hidden');
@@ -934,6 +975,15 @@ document.addEventListener('keydown', e => {
 // server field changes (so it points at whichever server you'll actually play on).
 loadServerConfig().then(fetchLeaderboard);
 $id('ws-url').addEventListener('change', fetchLeaderboard);
+
+// Watch button on a leaderboard row → stream that race's replay (delegated, so
+// it survives the list being re-rendered on every board refresh).
+$id('lb-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.lb-watch');
+  if (!btn) return;
+  const raceId = btn.getAttribute('data-race');
+  if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); }
+});
 
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
 class RaceScene extends Phaser.Scene {
@@ -1048,9 +1098,13 @@ class RaceScene extends Phaser.Scene {
     // the HUD shows elapsed time immediately rather than waiting on the first move.
     if (multiMode) this._startTimer();
 
-    this.add.text(W / 2, H - 6 * RES, 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)', {
+    // In a replay there are no controls — swap the input hint for a REPLAY marker.
+    const footer = replayMode
+      ? '● REPLAY — watching a recorded race · 🏠 for leaderboard'
+      : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)';
+    this.add.text(W / 2, H - 6 * RES, footer, {
       fontFamily: 'monospace', fontSize: fs(10),
-      color: '#ffffff', stroke: '#000', strokeThickness: 3,
+      color: replayMode ? '#e8d030' : '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5, 1).setScrollFactor(0);
 
     // ── input ──────────────────────────────────────────────────
@@ -1144,6 +1198,7 @@ class RaceScene extends Phaser.Scene {
   // ── move ──────────────────────────────────────────────────────────────────
   move(dx, dlane) {
     if (this.busy || this.won) return;
+    if (replayMode) return; // spectating a recording — input does nothing
 
     // MULTIPLAYER: send to server; applyServerState() handles the result
     if (multiMode) {
