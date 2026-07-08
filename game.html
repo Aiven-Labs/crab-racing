@@ -72,31 +72,6 @@
   #cfg-obstacles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
   #cfg-obstacles input { width: auto !important; }
 
-  /* ── Leaderboard ───────────────────────────────────── */
-  #leaderboard { font-family: monospace; color: #c0d8f0; }
-  #leaderboard h2 {
-    font-size: 13px; color: #e8d030; letter-spacing: 2px;
-    margin-bottom: 6px; text-transform: uppercase;
-  }
-  #lb-list { list-style: none; font-size: 13px; }
-  #lb-list li {
-    display: flex; justify-content: space-between; gap: 10px;
-    padding: 3px 4px; border-bottom: 1px solid #16283c;
-  }
-  #lb-list .lb-swatch {
-    flex: 0 0 auto; width: 10px; height: 10px; border-radius: 2px;
-    align-self: center; border: 1px solid #0006;
-  }
-  #lb-list .lb-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #lb-list .lb-time { flex: 0 0 auto; color: #7ec8e3; font-variant-numeric: tabular-nums; }
-  #lb-list .lb-watch {
-    flex: 0 0 auto; width: 20px; height: 18px; padding: 0; line-height: 1;
-    background: #16283c; border: 1px solid #2a5070; border-radius: 3px;
-    color: #7ec8e3; font-size: 10px; cursor: pointer;
-  }
-  #lb-list .lb-watch:hover { background: #234; color: #e8d030; border-color: #e8d030; }
-  #lb-list .lb-watch-gap { flex: 0 0 auto; width: 20px; } /* keep rows aligned */
-  #lb-empty { font-size: 12px; color: #567; }
 
   /* ── How-to-play modal ─────────────────────────────── */
   #btn-help { margin-top: 2px; }
@@ -148,8 +123,8 @@
 </head>
 <body>
 
-<!-- Persistent "home" button — shown only while a race is on screen, so the
-     player can always bail back to the lobby (and its leaderboard). -->
+<!-- Persistent "home" button — shown only while a race or replay is on screen,
+     so the player can always bail back to the lobby. -->
 <button id="btn-home" class="hidden" title="Back to lobby">🏠 Home</button>
 
 <!-- ── Lobby ─────────────────────────────────────────── -->
@@ -191,12 +166,6 @@
     <!-- Shown to the lobby host once 2+ players are in, so they can start the
          race before the lobby's join window elapses. -->
     <button id="btn-start" class="hidden">Start Match</button>
-    <hr>
-    <div id="leaderboard">
-      <h2>🏆 Fastest Crabs</h2>
-      <ol id="lb-list"></ol>
-      <div id="lb-empty">No times yet — be the first!</div>
-    </div>
   </div>
 </div>
 
@@ -206,11 +175,11 @@
     <button id="btn-help-close" title="Close">✕</button>
     <h2>🦀 How to Play</h2>
     <p class="goal">Scuttle your crab from the shoreline all the way to the
-      checkered finish line. Reach it as fast as you can — the clock is running,
-      and the fastest crabs make the leaderboard. In a multiplayer room the race
-      keeps going after the first finish: once one crab crosses, everyone else
-      gets a few seconds to reach the line before the race ends — stragglers are
-      recorded as <strong>DNF</strong>.</p>
+      checkered finish line. Reach it as fast as you can — the clock is running.
+      In a multiplayer room the race keeps going after the first finish: once one
+      crab crosses, everyone else gets a few seconds to reach the line before the
+      race ends — stragglers are recorded as <strong>DNF</strong>. Every
+      multiplayer race can be shared and re-watched as a replay.</p>
 
     <h3>Controls</h3>
     <ul id="help-keys">
@@ -243,6 +212,7 @@ let gameScene    = null;  // set by RaceScene.create()
 let isHost       = false; // true when this client created the lobby (may start it)
 let lobbyLocked  = false; // true once the lobby stops accepting new joiners
 let replayMode   = false; // true while watching a recorded race (spectator, no input)
+let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
 
 const CRAB_PALETTES = [
   ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
@@ -683,6 +653,7 @@ function handleServerMsg(msg) {
       break;
     case 'go':
       multiPlayers = msg.players;
+      currentRaceId = msg.raceId || null; // recorded-race handle for share/replay
       if (msg.config) applyGameConfig(msg.config); // authoritative track config
       if (msg.seed != null) buildObstacles(msg.seed); // authoritative seed for the race
       $id('lobby').classList.add('hidden');
@@ -786,55 +757,24 @@ function ordinal(n) {
   return `${n}${suffix}`;
 }
 
-function renderLeaderboard(board) {
-  const list  = $id('lb-list');
-  const empty = $id('lb-empty');
-  if (!list) return;
-  if (!board || board.length === 0) {
-    list.innerHTML = '';
-    if (empty) empty.style.display = '';
-    return;
-  }
-  if (empty) empty.style.display = 'none';
-  list.innerHTML = board.map((row, i) => {
-    const hex = PALETTE_HEX[row.colorIdx] || PALETTE_HEX[0];
-    // Expose the seed as a hover title so a run can be replayed on the same track.
-    const seedTitle = row.seed ? ` title="seed: ${escapeHtml(row.seed)}"` : '';
-    // A watchable run has a recorded raceId — show a ▶ button that streams the
-    // replay. Rows without one (older runs / expired records) just omit it.
-    const watchBtn = row.raceId
-      ? `<button class="lb-watch" data-race="${escapeHtml(row.raceId)}" title="Watch this run">▶</button>`
-      : '<span class="lb-watch-gap"></span>';
-    return `<li${seedTitle}><span class="lb-swatch" style="background:${hex}"></span>` +
-           `<span class="lb-name" style="color:${hex}">${escapeHtml(row.name)}</span>` +
-           `<span class="lb-time">${fmtTime(row.timeCs)}</span>${watchBtn}</li>`;
-  }).join('');
-}
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-async function fetchLeaderboard() {
+// Record a finish on the server. The persistent global board is no longer shown
+// on the home page (finish times aren't comparable across different seeds/track
+// settings — the fair ranking is the per-race results screen). We still POST so
+// the server keeps its records (incl. the seed + raceId for replay); the result
+// is intentionally not rendered anywhere.
+async function submitScore(name, timeCs, colorIdx, seed, raceId) {
   try {
-    const res = await fetch(`${leaderboardBase()}/leaderboard`);
-    if (res.ok) renderLeaderboard(await res.json());
-  } catch { /* server may be down — leave the board as-is */ }
-}
-
-// Record a finish; returns the updated board (or null on failure).
-// `seed` is the obstacle seed the race was run on, so the entry can be replayed.
-async function submitScore(name, timeCs, colorIdx, seed) {
-  try {
-    const res = await fetch(`${leaderboardBase()}/leaderboard`, {
+    await fetch(`${leaderboardBase()}/leaderboard`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, timeCs, colorIdx, seed }),
+      body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId }),
     });
-    if (res.ok) { const board = await res.json(); renderLeaderboard(board); return board; }
   } catch { /* offline — score just isn't recorded */ }
-  return null;
 }
 
 // Read the seed input: blank → random seed, otherwise the custom string.
@@ -901,10 +841,9 @@ function startGame(isMulti) {
   });
 }
 
-// Tear down the current race and return to the lobby. Fully destroys the Phaser
-// game (so the next race starts clean past startGame's double-init guard) and
-// closes any multiplayer socket. Refreshes the board — the finish just recorded
-// shows up here, since the leaderboard lives on the lobby screen.
+// Tear down the current race (or replay) and return to the lobby. Fully destroys
+// the Phaser game (so the next race starts clean past startGame's double-init
+// guard) and closes any multiplayer/spectator socket.
 function goHome() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene = null;
@@ -914,12 +853,14 @@ function goHome() {
   isHost      = false;
   lobbyLocked = false;
   replayMode  = false;
+  currentRaceId = null;
+  // Drop any ?replay=… from the address bar so a refresh doesn't re-launch it.
+  if (location.search) history.replaceState(null, '', location.pathname);
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
   $id('btn-start').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
-  fetchLeaderboard();
 }
 
 $id('btn-home').onclick = goHome;
@@ -971,19 +912,40 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$id('help-modal').classList.contains('hidden')) closeHelp();
 });
 
-// Show the leaderboard on the home page right away, and refresh it whenever the
-// server field changes (so it points at whichever server you'll actually play on).
-loadServerConfig().then(fetchLeaderboard);
-$id('ws-url').addEventListener('change', fetchLeaderboard);
-
-// Watch button on a leaderboard row → stream that race's replay (delegated, so
-// it survives the list being re-rendered on every board refresh).
-$id('lb-list').addEventListener('click', (e) => {
-  const btn = e.target.closest('.lb-watch');
-  if (!btn) return;
-  const raceId = btn.getAttribute('data-race');
+// Load server config (WS URL override + track config), then — if the page was
+// opened with a ?replay=<raceId> share link — jump straight into watching that
+// recorded race instead of showing the lobby.
+loadServerConfig().then(() => {
+  const raceId = new URLSearchParams(location.search).get('replay');
   if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); }
 });
+
+// Build the shareable replay link for a race: this page's origin + ?replay=<id>.
+function replayShareUrl(raceId) {
+  const u = new URL(location.href);
+  u.search = ''; u.hash = '';
+  u.searchParams.set('replay', raceId);
+  return u.toString();
+}
+
+// Copy text to the clipboard, resolving true on success. Falls back to a hidden
+// textarea + execCommand for non-secure contexts where navigator.clipboard is
+// unavailable (e.g. plain http:// on a LAN IP).
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text); return true;
+    }
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
 
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
 class RaceScene extends Phaser.Scene {
@@ -1100,7 +1062,7 @@ class RaceScene extends Phaser.Scene {
 
     // In a replay there are no controls — swap the input hint for a REPLAY marker.
     const footer = replayMode
-      ? '● REPLAY — watching a recorded race · 🏠 for leaderboard'
+      ? '● REPLAY — watching a recorded race · 🏠 Home'
       : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)';
     this.add.text(W / 2, H - 6 * RES, footer, {
       fontFamily: 'monospace', fontSize: fs(10),
@@ -1373,9 +1335,10 @@ class RaceScene extends Phaser.Scene {
 
     const { width: W, height: H } = this.scale;
 
-    // Record the finish on the shared leaderboard (name + time + crab colour + seed).
+    // Record the finish on the server (name + time + colour + seed). Solo races
+    // aren't server-run, so there's no raceId/replay for them.
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
-    submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '');
+    submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '', '');
 
     this.add.rectangle(W/2, H/2, 240*RES, 92*RES, 0x0a1828, 230).setScrollFactor(0);
     this.add.text(W/2, H/2 - 22*RES, '🦀  FINISH!  🦀', {
@@ -1386,7 +1349,7 @@ class RaceScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: fs(13),
       color: '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 for leaderboard', {
+    this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 Home', {
       fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
@@ -1408,10 +1371,11 @@ class RaceScene extends Phaser.Scene {
     if (this.timerEvent) this.timerEvent.remove();
     if (Number.isFinite(finishTimeCs)) this.timerText.setText(fmtTime(finishTimeCs));
 
-    // Record my finish on the shared leaderboard (server-authoritative time).
+    // Record my finish on the server (server-authoritative time). Not displayed
+    // on the home page anymore; kept for the server's records incl. replay.
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
     const timeCs = Number.isFinite(finishTimeCs) ? finishTimeCs : this.raceTime;
-    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '');
+    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '', currentRaceId || '');
 
     this.statusText.setColor('#e8e030');
     this.statusText.setText(`🦀 FINISHED ${ordinal(place)} — waiting for the rest…`);
@@ -1459,8 +1423,11 @@ class RaceScene extends Phaser.Scene {
     const rows = Array.isArray(results) ? results : [];
     const { width: W, height: H } = this.scale;
 
+    // A recorded, replayable race (has a raceId and we weren't already watching
+    // a replay) gets a Share button, which needs an extra row of panel height.
+    const canShare = !!currentRaceId && !replayMode;
     const rowH   = 14;
-    const panelH = 44 + rows.length * rowH;
+    const panelH = 44 + rows.length * rowH + (canShare ? 18 : 0);
     this.add.rectangle(W/2, H/2, 300*RES, panelH*RES, 0x0a1828, 235).setScrollFactor(0);
     this.add.text(W/2, H/2 - (panelH/2 - 10)*RES, '🏁  RESULTS  🏁', {
       fontFamily: 'monospace', fontSize: fs(16),
@@ -1482,7 +1449,26 @@ class RaceScene extends Phaser.Scene {
       y += rowH * RES;
     }
 
-    this.add.text(W/2, H/2 + (panelH/2 - 8)*RES, 'tap 🏠 Home for the leaderboard', {
+    // Share-replay button: copies a ?replay=<raceId> link to the clipboard so
+    // anyone can watch this exact race. Interactive Phaser text (canvas UI).
+    if (canShare) {
+      const shareBtn = this.add.text(W/2, y + 2*RES, '📋 Share replay', {
+        fontFamily: 'monospace', fontSize: fs(12),
+        color: '#7ec8e3', backgroundColor: '#16283c',
+        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+      const raceId = currentRaceId;
+      shareBtn.on('pointerup', async () => {
+        const ok = await copyToClipboard(replayShareUrl(raceId));
+        shareBtn.setText(ok ? '✅ Link copied!' : '⚠ Copy failed — see console');
+        if (!ok) console.log('Replay link:', replayShareUrl(raceId));
+        shareBtn.setColor(ok ? '#90d090' : '#ff9060');
+        this.time.delayedCall(2000, () => { shareBtn.setText('📋 Share replay'); shareBtn.setColor('#7ec8e3'); });
+      });
+      y += 18 * RES;
+    }
+
+    this.add.text(W/2, H/2 + (panelH/2 - 8)*RES, 'tap 🏠 Home to play again', {
       fontFamily: 'monospace', fontSize: fs(10), color: '#7ec8e3',
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
