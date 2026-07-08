@@ -213,6 +213,7 @@ let isHost       = false; // true when this client created the lobby (may start 
 let lobbyLocked  = false; // true once the lobby stops accepting new joiners
 let replayMode   = false; // true while watching a recorded race (spectator, no input)
 let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
+let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
 
 const CRAB_PALETTES = [
   ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
@@ -826,6 +827,20 @@ function startReplay(raceId, speed = 1) {
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Replay ended'); };
 }
 
+// Watch a portable solo replay carried entirely in the #replay link — no server.
+// Rebuild the record's track locally, then run it as a solo scene driven by the
+// recorded inputs (see RaceScene._startSoloReplay). Works on any instance/offline.
+function startLocalReplay(record) {
+  if (!record || !record.config || !Array.isArray(record.moves)) return;
+  replayMode = true;
+  myPlayerId = null;
+  pendingSoloReplay = record;
+  applyGameConfig(record.config);         // lanes / zones / obstacles for this run
+  buildObstacles(record.seed);            // identical track from the recorded seed
+  $id('lobby').classList.add('hidden');
+  startGame(false);                       // solo scene; create() kicks off the replay
+}
+
 function startGame(isMulti) {
   multiMode = isMulti;
   $id('btn-home').classList.remove('hidden');
@@ -854,8 +869,10 @@ function goHome() {
   lobbyLocked = false;
   replayMode  = false;
   currentRaceId = null;
-  // Drop any ?replay=… from the address bar so a refresh doesn't re-launch it.
-  if (location.search) history.replaceState(null, '', location.pathname);
+  pendingSoloReplay = null;
+  // Drop any ?replay= / #replay= from the address bar so a refresh doesn't
+  // re-launch the replay.
+  if (location.search || location.hash) history.replaceState(null, '', location.pathname);
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
   $id('btn-start').classList.add('hidden');
@@ -912,10 +929,13 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$id('help-modal').classList.contains('hidden')) closeHelp();
 });
 
-// Load server config (WS URL override + track config), then — if the page was
-// opened with a ?replay=<raceId> share link — jump straight into watching that
-// recorded race instead of showing the lobby.
+// Load server config, then — if opened with a replay share link — jump straight
+// into the replay instead of the lobby. Two link forms:
+//   #replay=<data>    portable solo replay, decoded + played locally (any instance)
+//   ?replay=<raceId>  server-recorded race, streamed back via the watch handler
 loadServerConfig().then(() => {
+  const soloRec = parseSoloReplayHash();
+  if (soloRec) { $id('btn-home').classList.remove('hidden'); startLocalReplay(soloRec); return; }
   const raceId = new URLSearchParams(location.search).get('replay');
   if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); }
 });
@@ -945,6 +965,69 @@ async function copyToClipboard(text) {
     document.body.removeChild(ta);
     return ok;
   } catch { return false; }
+}
+
+// ─── portable solo replay links ───────────────────────────────────────────────
+// A solo race is fully deterministic (seed + track config + the input sequence
+// reproduce it exactly), so we can pack the whole race into the link itself as
+// #replay=<base64url(json)>. Unlike the multiplayer ?replay=<raceId> link — which
+// only resolves on the server that stored the record — this replays locally on
+// ANY instance, even offline. The record lives in the URL *hash*, so it is never
+// sent to the server.
+const REPLAY_RECORD_VERSION = 1;
+
+// base64url <-> UTF-8 string. encodeURIComponent first so non-ASCII crab names
+// survive btoa (which only handles Latin-1).
+function b64urlEncode(str) {
+  const b64 = btoa(unescape(encodeURIComponent(str)));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  return decodeURIComponent(escape(atob(b64)));
+}
+
+// Build the portable record for a finished solo race from the current track
+// globals + the scene's recorded inputs.
+function buildSoloRecord(soloMoves, finishTimeCs, name, colorIdx) {
+  return {
+    v: REPLAY_RECORD_VERSION,
+    seed: raceSeed != null ? String(raceSeed) : '',
+    // Client-shaped config (mirrors the server's configForClient), enough for
+    // buildObstacles + applyGameConfig to rebuild the identical track.
+    config: {
+      lanes: LANES, zones: ZONES, obstacleKinds: OBSTACLE_KINDS,
+      obstacleStartCell: OBSTACLE_START_CELL, obstacleDensity: OBSTACLE_DENSITY,
+      dnfTimeoutSecs: DNF_TIMEOUT_SECS,
+    },
+    players: [{ id: 'solo', name: String(name).slice(0, 20), colorIdx, lane: Math.floor(LANES / 2) }],
+    moves: (soloMoves || []).map(m => ({ dx: m.dx, dlane: m.dlane })),
+    finishTimeCs,
+  };
+}
+
+// #replay=<data> link for a solo record. Uses the hash so the payload stays
+// client-side. Returns { url, tooLong } — some browsers/proxies choke on very
+// long URLs, so flag when a link is unusually large (long races).
+const REPLAY_URL_WARN_LEN = 8000;
+function soloReplayShareUrl(record) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = 'replay=' + b64urlEncode(JSON.stringify(record));
+  const url = u.toString();
+  return { url, tooLong: url.length > REPLAY_URL_WARN_LEN };
+}
+
+// Parse a #replay=<data> hash into a record, or null if absent/malformed.
+function parseSoloReplayHash() {
+  const h = location.hash.replace(/^#/, '');
+  const m = /(?:^|&)replay=([^&]+)/.exec(h);
+  if (!m) return null;
+  try {
+    const rec = JSON.parse(b64urlDecode(m[1]));
+    if (rec && Array.isArray(rec.moves) && rec.config) return rec;
+  } catch { /* malformed link */ }
+  return null;
 }
 
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
@@ -1097,12 +1180,23 @@ class RaceScene extends Phaser.Scene {
     });
 
     this.refreshHUD();
+
+    // Local solo replay: a #replay record was loaded → drive the recorded inputs
+    // through the shared solo step. multiMode is false here, so this reuses the
+    // solo crab/scene; replayMode gates out live input.
+    if (replayMode && pendingSoloReplay) {
+      const rec = pendingSoloReplay;
+      this._startSoloReplay(rec);
+    }
   }
 
   // ── crab setup helpers ─────────────────────────────────────────────────────
   _setupSoloCrab(trackTop) {
     this.cell = 0;
     this.lane = Math.floor(LANES / 2);
+    // Buffer of processed inputs, so a finished solo race can be re-simulated
+    // for a portable replay. Reset each race (create() re-runs on restart).
+    this.soloMoves = [];
 
     const key = 'crab_0';
     if (!this.textures.exists(key)) {
@@ -1170,8 +1264,23 @@ class RaceScene extends Phaser.Scene {
       return;
     }
 
-    // SOLO: local authoritative logic (unchanged from original)
+    // SOLO: local authoritative logic
     if (!this.timerStarted) this._startTimer();
+
+    // Record every input the solo logic processes (past the busy/won guard), so
+    // the race can be re-simulated for a portable replay. Stun-consumes, blocks
+    // and out-of-bounds taps are all deterministic no-ops/effects on the same
+    // track, so replaying this exact sequence reproduces the run bit-for-bit.
+    this.soloMoves?.push({ dx, dlane });
+    this._soloStep(dx, dlane);
+  }
+
+  // ── _soloStep ───────────────────────────────────────────────────────────────
+  // The authoritative solo movement + animation for one input. Shared by live
+  // play (move()) and by local replay (_pumpReplay), so a replay animates
+  // identically to the original race. Deterministic against the current track.
+  _soloStep(dx, dlane) {
+    if (this.busy || this.won) return;
 
     if (this.stunTurns > 0) {
       this.stunTurns--;
@@ -1236,6 +1345,28 @@ class RaceScene extends Phaser.Scene {
         }
       },
     });
+  }
+
+  // ── local solo replay ───────────────────────────────────────────────────────
+  // Re-simulate a recorded solo race by feeding its input sequence through the
+  // same _soloStep. No server involved — this is how a portable #replay link
+  // plays on any instance. Paced to wait out each move's animation.
+  _startSoloReplay(record) {
+    this.replayRecord = record;
+    this.replayIdx    = 0;
+    this._startTimer();
+    this.statusText.setColor('#e8d030');
+    this.statusText.setText('● REPLAY');
+    this._pumpReplay();
+  }
+
+  _pumpReplay() {
+    if (this.won || !this.replayRecord) return;
+    if (this.busy) { this.time.delayedCall(30, () => this._pumpReplay()); return; }
+    if (this.replayIdx >= this.replayRecord.moves.length) return; // ran dry (shouldn't for a finished run)
+    const m = this.replayRecord.moves[this.replayIdx++];
+    this._soloStep(m.dx, m.dlane);
+    this.time.delayedCall(140, () => this._pumpReplay());
   }
 
   // ── applyServerState ────────────────────────────────────────────────────────
@@ -1334,30 +1465,68 @@ class RaceScene extends Phaser.Scene {
     if (this.timerEvent) this.timerEvent.remove();
 
     const { width: W, height: H } = this.scale;
+    const watching = replayMode; // replaying a recorded solo race, not a live run
 
-    // Record the finish on the server (name + time + colour + seed). Solo races
-    // aren't server-run, so there's no raceId/replay for them.
+    // Show the finish time. For a replay, use the recorded authoritative time so
+    // it matches the original run rather than the replay's wall clock.
+    const shownCs = watching && Number.isFinite(this.replayRecord?.finishTimeCs)
+      ? this.replayRecord.finishTimeCs : this.raceTime;
+    if (this.timerText) this.timerText.setText(fmtTime(shownCs));
+    if (this.statusText) this.statusText.setText('');
+
+    // A live solo finish is recordable/shareable; a replay is not.
+    let panelH = 92;
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
-    submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '', '');
+    if (!watching) {
+      // Record on the server (name + time + colour + seed). Solo isn't server-run,
+      // so there's no server raceId — sharing is via the portable #replay link.
+      submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '', '');
+      panelH = 112; // room for the Share button
+    }
 
-    this.add.rectangle(W/2, H/2, 240*RES, 92*RES, 0x0a1828, 230).setScrollFactor(0);
-    this.add.text(W/2, H/2 - 22*RES, '🦀  FINISH!  🦀', {
+    this.add.rectangle(W/2, H/2, 260*RES, panelH*RES, 0x0a1828, 230).setScrollFactor(0);
+    this.add.text(W/2, H/2 - (panelH/2 - 14)*RES, watching ? '🦀  REPLAY  🦀' : '🦀  FINISH!  🦀', {
       fontFamily: 'monospace', fontSize: fs(20),
       color: '#e8e030', stroke: '#000', strokeThickness: 4,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 4*RES, `Time: ${fmtTime(this.raceTime)}`, {
+    this.add.text(W/2, H/2 - (panelH/2 - 40)*RES, `Time: ${fmtTime(shownCs)}`, {
       fontFamily: 'monospace', fontSize: fs(13),
       color: '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 + 24*RES, 'tap or space to race again · 🏠 Home', {
+
+    if (!watching) {
+      // Share-replay button: packs the whole race into a portable #replay link
+      // that replays on any instance (see soloReplayShareUrl).
+      const soloMoves = this.soloMoves || [];
+      const shareBtn = this.add.text(W/2, H/2 + (panelH/2 - 34)*RES, '📋 Share replay', {
+        fontFamily: 'monospace', fontSize: fs(12),
+        color: '#7ec8e3', backgroundColor: '#16283c',
+        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+      shareBtn.on('pointerup', async () => {
+        const rec = buildSoloRecord(soloMoves, this.raceTime, playerName, myColorIdx);
+        const { url, tooLong } = soloReplayShareUrl(rec);
+        const ok = await copyToClipboard(url);
+        shareBtn.setText(ok ? (tooLong ? '✅ Copied (long link!)' : '✅ Link copied!') : '⚠ Copy failed — see console');
+        if (!ok) console.log('Replay link:', url);
+        shareBtn.setColor(ok ? '#90d090' : '#ff9060');
+        this.time.delayedCall(2200, () => { shareBtn.setText('📋 Share replay'); shareBtn.setColor('#7ec8e3'); });
+      });
+    }
+
+    this.add.text(W/2, H/2 + (panelH/2 - 10)*RES,
+      watching ? 'tap 🏠 Home' : 'tap or space to race again · 🏠 Home', {
       fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
       stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
 
-    this.time.delayedCall(400, () => {
-      this.input.once('pointerdown', () => this.scene.restart());
-      this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
-    });
+    // Only a live race restarts on tap; a replay just sits on the results.
+    if (!watching) {
+      this.time.delayedCall(400, () => {
+        this.input.once('pointerdown', () => this.scene.restart());
+        this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+      });
+    }
   }
 
   // ── onFinish (multiplayer, my crab) ─────────────────────────────────────────
