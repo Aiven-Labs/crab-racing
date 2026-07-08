@@ -1001,7 +1001,9 @@ function buildSoloRecord(soloMoves, finishTimeCs, name, colorIdx) {
       dnfTimeoutSecs: DNF_TIMEOUT_SECS,
     },
     players: [{ id: 'solo', name: String(name).slice(0, 20), colorIdx, lane: Math.floor(LANES / 2) }],
-    moves: (soloMoves || []).map(m => ({ dx: m.dx, dlane: m.dlane })),
+    // t = race-clock offset (cs) of each input, so replay preserves the original
+    // pacing. Defaults to 0 for any move recorded before timing existed.
+    moves: (soloMoves || []).map(m => ({ dx: m.dx, dlane: m.dlane, t: m.t | 0 })),
     finishTimeCs,
   };
 }
@@ -1271,7 +1273,9 @@ class RaceScene extends Phaser.Scene {
     // the race can be re-simulated for a portable replay. Stun-consumes, blocks
     // and out-of-bounds taps are all deterministic no-ops/effects on the same
     // track, so replaying this exact sequence reproduces the run bit-for-bit.
-    this.soloMoves?.push({ dx, dlane });
+    // `t` is the race-clock offset (centiseconds) so replay can honour the
+    // player's original pacing rather than firing moves back-to-back.
+    this.soloMoves?.push({ dx, dlane, t: this.raceTime });
     this._soloStep(dx, dlane);
   }
 
@@ -1354,19 +1358,31 @@ class RaceScene extends Phaser.Scene {
   _startSoloReplay(record) {
     this.replayRecord = record;
     this.replayIdx    = 0;
+    // Old records (or any all-zero-t set) have no usable timing → fall back to
+    // just waiting out each animation rather than gating on the race clock.
+    this.replayHasTiming = (record.moves || []).some(m => m.t);
     this._startTimer();
     this.statusText.setColor('#e8d030');
     this.statusText.setText('● REPLAY');
     this._pumpReplay();
   }
 
+  // Replay each recorded move at the same race-clock offset (m.t, centiseconds)
+  // the player made it, so the replay is paced like the original run rather than
+  // firing moves back-to-back. this.raceTime is the replay clock (started above);
+  // a move whose animation is still running (busy) waits a beat. Falls back to a
+  // small fixed gap for old records that lack timing (all t === 0).
   _pumpReplay() {
     if (this.won || !this.replayRecord) return;
-    if (this.busy) { this.time.delayedCall(30, () => this._pumpReplay()); return; }
     if (this.replayIdx >= this.replayRecord.moves.length) return; // ran dry (shouldn't for a finished run)
-    const m = this.replayRecord.moves[this.replayIdx++];
+    const m = this.replayRecord.moves[this.replayIdx];
+    // Wait until we've reached this move's recorded offset (and the previous
+    // animation has cleared). Re-check on a short tick until both hold.
+    const ready = (!this.replayHasTiming || this.raceTime >= (m.t | 0)) && !this.busy;
+    if (!ready) { this.time.delayedCall(20, () => this._pumpReplay()); return; }
+    this.replayIdx++;
     this._soloStep(m.dx, m.dlane);
-    this.time.delayedCall(140, () => this._pumpReplay());
+    this._pumpReplay();
   }
 
   // ── applyServerState ────────────────────────────────────────────────────────
