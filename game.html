@@ -52,6 +52,15 @@
   #lobby-status { font-size: 13px; color: #5898b8; min-height: 16px; }
   #player-list  { font-size: 13px; min-height: 16px; letter-spacing: 1px; }
   #multi-section { display: flex; flex-direction: column; gap: 6px; }
+
+  /* ── Crab colour picker ────────────────────────────── */
+  #color-picker { display: flex; gap: 8px; justify-content: center; align-items: center; }
+  #color-picker .swatch {
+    width: 30px; height: 30px; padding: 0; cursor: pointer;
+    border: 2px solid #2a5070; image-rendering: pixelated;
+  }
+  #color-picker .swatch:hover { border-color: #4a90c0; }
+  #color-picker .swatch.sel   { border-color: #e8d030; }
   .lrow { display: flex; gap: 6px; }
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
@@ -133,6 +142,8 @@
     <h1>🦀 CRAB RACING</h1>
     <div class="sub">COASTAL SURVIVAL RACE</div>
     <button id="btn-help">❓ How to Play</button>
+    <!-- Pick your crab colour (solo). Swatches are built by buildColorPicker(). -->
+    <div id="color-picker" title="Choose your crab"></div>
     <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
     <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
          Join (the room creator's settings fix the room, later joiners inherit). -->
@@ -205,7 +216,7 @@
 // ─── multiplayer globals ───────────────────────────────────────────────────────
 let ws           = null;
 let myPlayerId   = null;
-let myColorIdx   = 0;
+let myColorIdx   = 0;   // chosen crab colour (solo); set from saved pref at load
 let multiMode    = false;
 let multiPlayers = [];    // player list received with 'go' message
 let gameScene    = null;  // set by RaceScene.create()
@@ -550,6 +561,38 @@ function buildObstacleToggles() {
   }).join('');
 }
 
+// ─── crab colour picker ──────────────────────────────────────────────────────
+// Your chosen crab colour (index into CRAB_PALETTES). Persisted so it sticks
+// between visits. Applies to solo races (in multiplayer the server assigns colour
+// by join order). myColorIdx starts from the saved preference.
+function loadColorPref() {
+  try { const n = parseInt(localStorage.getItem('crabColor'), 10);
+        return (n >= 0 && n < CRAB_PALETTES.length) ? n : 0; } catch { return 0; }
+}
+function saveColorPref(idx) { try { localStorage.setItem('crabColor', String(idx)); } catch {} }
+
+// Render a swatch per palette showing the actual crab sprite (frame 0), and let
+// the player pick. Updates myColorIdx + the selected outline.
+function buildColorPicker() {
+  const box = $id('color-picker');
+  if (!box) return;
+  box.innerHTML = '';
+  CRAB_PALETTES.forEach((pal, idx) => {
+    // Draw frame 0 of the crab sheet for this palette into a 32×32 swatch.
+    const { canvas, ctx } = makeCanvas(32, 32);
+    const sheet = makeCrabSheet(pal);
+    ctx.drawImage(sheet.canvas, 0, 0, 32, 32, 0, 0, 32, 32);
+    canvas.className = 'swatch' + (idx === myColorIdx ? ' sel' : '');
+    canvas.title = ['Blue', 'Red', 'Green', 'Purple'][idx] || `Colour ${idx}`;
+    canvas.onclick = () => {
+      myColorIdx = idx;
+      saveColorPref(idx);
+      box.querySelectorAll('.swatch').forEach((s, i) => s.classList.toggle('sel', i === idx));
+    };
+    box.appendChild(canvas);
+  });
+}
+
 // Sync the lanes/length input placeholders to the current default track, so a
 // blank field honestly shows the value it will inherit (which the deployed
 // game-config.json may have changed from the baked-in 3 / 46).
@@ -572,6 +615,10 @@ function refreshLobbyBaselines() {
 // Build the toggles immediately (DOM is ready — this script is at end of body) so
 // the settings panel is fully usable before the async config fetch resolves.
 refreshLobbyBaselines();
+
+// Restore the saved crab colour and build the picker.
+myColorIdx = loadColorPref();
+buildColorPicker();
 
 // Apply lobby overrides to the local track (solo races). Clamps + scales exactly
 // like the server so a solo track matches what a multiplayer room would build.
@@ -1240,9 +1287,14 @@ class RaceScene extends Phaser.Scene {
     // for a portable replay. Reset each race (create() re-runs on restart).
     this.soloMoves = [];
 
-    const key = 'crab_0';
+    // Crab colour: the player's chosen colour for a live race; the recorded run's
+    // colour when replaying a solo #replay so the replay looks like the original.
+    const colorIdx = (replayMode && pendingSoloReplay?.players?.[0]?.colorIdx != null)
+      ? pendingSoloReplay.players[0].colorIdx : (myColorIdx | 0);
+    this.soloColorIdx = colorIdx;
+    const key = `crab_${colorIdx}`;
     if (!this.textures.exists(key)) {
-      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[0]));
+      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[colorIdx]));
       for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
     }
 
@@ -1258,9 +1310,9 @@ class RaceScene extends Phaser.Scene {
     this.crab = this.add.sprite(CELLR/2, trackTop + this.lane * CELLR + CELLR/2, key)
       .setFrame(0).setScale(RES);
 
-    if (!this.anims.exists('walk_0')) {
+    if (!this.anims.exists('walk_' + colorIdx)) {
       this.anims.create({
-        key: 'walk_0',
+        key: 'walk_' + colorIdx,
         frames: [0,1,2,3].map(i => ({ key, frame: i })),
         frameRate: 10, repeat: -1,
       });
@@ -1438,7 +1490,7 @@ class RaceScene extends Phaser.Scene {
     }
 
     this.busy = true;
-    if (dx !== 0) this.crab.play('walk_0');
+    if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
 
     this.tweens.add({
       targets:  this.crab,
