@@ -1032,6 +1032,44 @@ function parseSoloReplayHash() {
   return null;
 }
 
+// ─── best-run "ghost" store ────────────────────────────────────────────────────
+// Your fastest solo run per track is kept in localStorage so a later solo race on
+// the same track can pit you against it as a ghost. Keyed by seed + a track
+// signature, so the same seed raced with different lanes/length/obstacles keeps
+// separate bests (times aren't comparable across different tracks). Client-side
+// and offline, matching solo play. Any storage error degrades to "no ghost".
+function trackSignature() {
+  return [
+    LANES, TOTAL_CELLS, FINISH_CELL, OBSTACLE_START_CELL, OBSTACLE_DENSITY,
+    OBSTACLE_KINDS.map(k => k.type).join('|'),
+  ].join(':');
+}
+function ghostKey(seed) { return `ghost:${seed}:${trackSignature()}`; }
+
+// Load the stored best run for the current seed+track, or null.
+function loadBestGhost(seed) {
+  try {
+    const raw = localStorage.getItem(ghostKey(seed));
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    return (rec && Array.isArray(rec.moves)) ? rec : null;
+  } catch { return null; }
+}
+
+// Save `record` as the seed's best if it beats the stored time (or none exists).
+// Returns 'best' if it became the new record, else null.
+function saveBestGhost(seed, record) {
+  if (!seed || !record || !Number.isFinite(record.finishTimeCs)) return null;
+  try {
+    const prev = loadBestGhost(seed);
+    if (prev && Number.isFinite(prev.finishTimeCs) && prev.finishTimeCs <= record.finishTimeCs) {
+      return null; // existing best is as good or better
+    }
+    localStorage.setItem(ghostKey(seed), JSON.stringify(record));
+    return 'best';
+  } catch { return null; }
+}
+
 // ─── Phaser scene ─────────────────────────────────────────────────────────────
 class RaceScene extends Phaser.Scene {
   constructor() { super('Race'); }
@@ -1146,9 +1184,11 @@ class RaceScene extends Phaser.Scene {
     if (multiMode) this._startTimer();
 
     // In a replay there are no controls — swap the input hint for a REPLAY marker.
+    // Racing against a stored PB adds a "vs 👻" note to the normal input hint.
     const footer = replayMode
       ? '● REPLAY — watching a recorded race · 🏠 Home'
-      : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)';
+      : (this.ghost ? '🏁 racing your best 👻 · tap/→ move · swipe ↑↓ lane'
+                    : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)');
     this.add.text(W / 2, H - 6 * RES, footer, {
       fontFamily: 'monospace', fontSize: fs(10),
       color: replayMode ? '#e8d030' : '#ffffff', stroke: '#000', strokeThickness: 3,
@@ -1205,6 +1245,16 @@ class RaceScene extends Phaser.Scene {
       const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[0]));
       for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
     }
+
+    // GHOST: when this is a live race (not a replay) and we have a stored best
+    // run for this seed+track, spawn a translucent ghost crab that re-runs it so
+    // the player can race their PB. Set up first so it renders BEHIND the live crab.
+    this.ghost = null;
+    if (!replayMode) {
+      const best = loadBestGhost(raceSeed != null ? String(raceSeed) : '');
+      if (best && best.moves.length) this._setupGhost(best, trackTop);
+    }
+
     this.crab = this.add.sprite(CELLR/2, trackTop + this.lane * CELLR + CELLR/2, key)
       .setFrame(0).setScale(RES);
 
@@ -1215,6 +1265,85 @@ class RaceScene extends Phaser.Scene {
         frameRate: 10, repeat: -1,
       });
     }
+  }
+
+  // ── ghost setup ─────────────────────────────────────────────────────────────
+  // A translucent crab that re-runs the stored best solo run for this track. It
+  // has its own position/stun state and sprite; _pumpGhost drives it on the same
+  // race clock as the live crab. It never triggers onWin — it's just a pace car.
+  _setupGhost(record, trackTop) {
+    const ghostColor = (record.players && record.players[0] && record.players[0].colorIdx) || 0;
+    const key = `crab_${ghostColor}`;
+    if (!this.textures.exists(key)) {
+      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[ghostColor]));
+      for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
+    }
+    if (!this.anims.exists('walk_' + ghostColor)) {
+      this.anims.create({
+        key: 'walk_' + ghostColor,
+        frames: [0,1,2,3].map(i => ({ key, frame: i })),
+        frameRate: 10, repeat: -1,
+      });
+    }
+    const startLane = Math.floor(LANES / 2);
+    const spr = this.add.sprite(CELLR/2, trackTop + startLane * CELLR + CELLR/2, key)
+      .setFrame(0).setScale(RES).setAlpha(0.4);
+    const lbl = this.add.text(CELLR/2, trackTop + startLane * CELLR + CELLR/2 - 10*RES, '👻 PB', {
+      fontFamily: 'monospace', fontSize: fs(8),
+      color: '#c8d8ff', stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5, 1).setAlpha(0.6);
+    this.ghost = {
+      record, spr, lbl, trackTop,
+      cell: 0, lane: startLane, stun: 0, busy: false, won: false, idx: 0,
+    };
+  }
+
+  // Advance the ghost by one recorded input (same movement rules as _soloStep,
+  // but operating on ghost state + sprite; no finish handler, no HUD/camera fx).
+  _ghostStep(dx, dlane) {
+    const g = this.ghost;
+    if (!g || g.busy || g.won) return;
+    if (g.stun > 0) { g.stun--; return; }
+    const nc = g.cell + dx, nl = g.lane + dlane;
+    if (nc < 0 || nc >= TOTAL_CELLS || nl < 0 || nl >= LANES) return;
+    const obs = OBS_MAP.get(`${nc},${nl}`);
+    if (obs?.effect === 'block') return;
+    g.busy = true;
+    if (dx !== 0) g.spr.play('walk_' + (g.record.players?.[0]?.colorIdx || 0), true);
+    this.tweens.add({
+      targets: g.spr,
+      x: nc * CELLR + CELLR/2,
+      y: g.trackTop + nl * CELLR + CELLR/2,
+      duration: 160, ease: 'Linear',
+      onUpdate:  () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES),
+      onComplete: () => {
+        g.cell = nc; g.lane = nl; g.busy = false;
+        if (obs?.effect === 'stun') g.stun = obs.turns;
+        else if (obs?.effect === 'push') {
+          const pushCell = Math.max(0, g.cell - 1);
+          this.tweens.add({ targets: g.spr, x: pushCell*CELLR + CELLR/2, duration: 120, ease: 'Linear',
+            onUpdate: () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES),
+            onComplete: () => { g.cell = pushCell; } });
+        }
+        g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES);
+        if (g.cell >= FINISH_CELL) { g.won = true; g.spr.stop?.(); g.spr.setFrame(0); }
+        else { g.spr.stop?.(); g.spr.setFrame(0); }
+      },
+    });
+  }
+
+  // Drive the ghost's recorded inputs on the live race clock (this.raceTime),
+  // so it paces exactly as the original PB run did. Mirrors _pumpReplay.
+  _pumpGhost() {
+    const g = this.ghost;
+    if (!g || g.won || this.won || this.raceOver) return;
+    if (g.idx >= g.record.moves.length) return;
+    const m = g.record.moves[g.idx];
+    const ready = (this.raceTime >= (m.t | 0)) && !g.busy;
+    if (!ready) { this.time.delayedCall(20, () => this._pumpGhost()); return; }
+    g.idx++;
+    this._ghostStep(m.dx, m.dlane);
+    this._pumpGhost();
   }
 
   _setupMultiCrabs(trackTop) {
@@ -1459,6 +1588,9 @@ class RaceScene extends Phaser.Scene {
         this.timerText.setText(fmtTime(this.raceTime));
       },
     });
+    // The ghost re-runs its recorded inputs on this same clock, so it starts
+    // pacing the moment the player's race clock does (their first move).
+    if (this.ghost) this._pumpGhost();
   }
 
   // ── refreshHUD ──────────────────────────────────────────────────────────────
@@ -1493,14 +1625,28 @@ class RaceScene extends Phaser.Scene {
     // A live solo finish is recordable/shareable; a replay is not.
     let panelH = 92;
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
+
+    // Ghost outcome: compare this run against the PB we raced (its recorded
+    // finish time), then persist this run as the new best if it's faster. Compare
+    // BEFORE saving so we measure against the run the ghost actually was.
+    let vsLine = null, vsColor = '#7ec8e3';
     if (!watching) {
-      // Record on the server (name + time + colour + seed). Solo isn't server-run,
-      // so there's no server raceId — sharing is via the portable #replay link.
-      submitScore(playerName, this.raceTime, myColorIdx, raceSeed != null ? String(raceSeed) : '', '');
-      panelH = 112; // room for the Share button
+      const seedStr = raceSeed != null ? String(raceSeed) : '';
+      const ghostCs = this.ghost?.record?.finishTimeCs;
+      if (Number.isFinite(ghostCs)) {
+        const delta = this.raceTime - ghostCs; // <0 → faster than PB
+        if (delta < 0) { vsLine = `👻 beat your best by ${fmtTime(-delta)}!`; vsColor = '#90d090'; }
+        else if (delta > 0) { vsLine = `👻 best was faster by ${fmtTime(delta)}`; vsColor = '#e0a060'; }
+        else { vsLine = '👻 dead heat with your best!'; vsColor = '#e8e030'; }
+      }
+      const rec = buildSoloRecord(this.soloMoves || [], this.raceTime, playerName, myColorIdx);
+      const isNewBest = saveBestGhost(seedStr, rec);
+      if (isNewBest) { vsLine = ghostCs != null ? vsLine : '🏆 new best — race again to chase it!'; vsColor = '#90d090'; }
+      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '');
+      panelH = 112 + (vsLine ? 16 : 0); // room for the Share button (+ vs line)
     }
 
-    this.add.rectangle(W/2, H/2, 260*RES, panelH*RES, 0x0a1828, 230).setScrollFactor(0);
+    this.add.rectangle(W/2, H/2, 280*RES, panelH*RES, 0x0a1828, 230).setScrollFactor(0);
     this.add.text(W/2, H/2 - (panelH/2 - 14)*RES, watching ? '🦀  REPLAY  🦀' : '🦀  FINISH!  🦀', {
       fontFamily: 'monospace', fontSize: fs(20),
       color: '#e8e030', stroke: '#000', strokeThickness: 4,
@@ -1509,6 +1655,12 @@ class RaceScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: fs(13),
       color: '#ffffff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5).setScrollFactor(0);
+    if (vsLine) {
+      this.add.text(W/2, H/2 - (panelH/2 - 58)*RES, vsLine, {
+        fontFamily: 'monospace', fontSize: fs(11), color: vsColor,
+        stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0);
+    }
 
     let shareBtn = null;
     if (!watching) {
