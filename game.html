@@ -53,14 +53,21 @@
   #player-list  { font-size: 13px; min-height: 16px; letter-spacing: 1px; }
   #multi-section { display: flex; flex-direction: column; gap: 6px; }
 
-  /* ── Crab colour picker ────────────────────────────── */
-  #color-picker { display: flex; gap: 8px; justify-content: center; align-items: center; }
-  #color-picker .swatch {
-    width: 30px; height: 30px; padding: 0; cursor: pointer;
-    border: 2px solid #2a5070; image-rendering: pixelated;
+  /* ── Crab colour carousel ──────────────────────────── */
+  #color-picker { display: flex; gap: 10px; justify-content: center; align-items: center; }
+  #color-picker .cp-arrow {
+    width: auto; padding: 6px 12px; font-size: 18px; line-height: 1;
+    /* inherits #lobby button styling; just size it as an arrow control */
   }
-  #color-picker .swatch:hover { border-color: #4a90c0; }
-  #color-picker .swatch.sel   { border-color: #e8d030; }
+  #color-picker .cp-preview {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    min-width: 72px;
+  }
+  #color-picker .cp-crab {
+    width: 48px; height: 48px; image-rendering: pixelated;
+    border: 2px solid #2a5070; background: #0e1828;
+  }
+  #color-picker .cp-name { font-size: 12px; color: #7ea8c8; letter-spacing: 1px; }
   .lrow { display: flex; gap: 6px; }
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
@@ -571,26 +578,49 @@ function loadColorPref() {
 }
 function saveColorPref(idx) { try { localStorage.setItem('crabColor', String(idx)); } catch {} }
 
-// Render a swatch per palette showing the actual crab sprite (frame 0), and let
-// the player pick. Updates myColorIdx + the selected outline.
+const CRAB_COLOR_NAMES = ['Blue', 'Red', 'Green', 'Purple'];
+
+// Carousel to choose your crab colour: ‹ arrow · preview crab + name · › arrow.
+// The arrows cycle myColorIdx through the palettes; the preview repaints in place.
 function buildColorPicker() {
   const box = $id('color-picker');
   if (!box) return;
   box.innerHTML = '';
-  CRAB_PALETTES.forEach((pal, idx) => {
-    // Draw frame 0 of the crab sheet for this palette into a 32×32 swatch.
-    const { canvas, ctx } = makeCanvas(32, 32);
-    const sheet = makeCrabSheet(pal);
-    ctx.drawImage(sheet.canvas, 0, 0, 32, 32, 0, 0, 32, 32);
-    canvas.className = 'swatch' + (idx === myColorIdx ? ' sel' : '');
-    canvas.title = ['Blue', 'Red', 'Green', 'Purple'][idx] || `Colour ${idx}`;
-    canvas.onclick = () => {
-      myColorIdx = idx;
-      saveColorPref(idx);
-      box.querySelectorAll('.swatch').forEach((s, i) => s.classList.toggle('sel', i === idx));
-    };
-    box.appendChild(canvas);
-  });
+
+  const prev = document.createElement('button');
+  prev.className = 'cp-arrow'; prev.textContent = '‹'; prev.title = 'Previous colour';
+
+  const preview = document.createElement('div');
+  preview.className = 'cp-preview';
+  const crab = makeCanvas(48, 48).canvas; // sized display canvas; painted by repaint()
+  crab.className = 'cp-crab';
+  const name = document.createElement('div');
+  name.className = 'cp-name';
+  preview.append(crab, name);
+
+  const next = document.createElement('button');
+  next.className = 'cp-arrow'; next.textContent = '›'; next.title = 'Next colour';
+
+  // Paint frame 0 of the current palette's crab into the preview + label it.
+  const repaint = () => {
+    const ctx = crab.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 48, 48);
+    const sheet = makeCrabSheet(CRAB_PALETTES[myColorIdx]); // returns the canvas
+    ctx.drawImage(sheet, 0, 0, 32, 32, 0, 0, 48, 48);
+    name.textContent = CRAB_COLOR_NAMES[myColorIdx] || `Colour ${myColorIdx}`;
+  };
+  const step = (d) => {
+    const n = CRAB_PALETTES.length;
+    myColorIdx = (myColorIdx + d + n) % n; // wrap around
+    saveColorPref(myColorIdx);
+    repaint();
+  };
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
+
+  box.append(prev, preview, next);
+  repaint();
 }
 
 // Sync the lanes/length input placeholders to the current default track, so a
