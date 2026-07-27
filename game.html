@@ -594,10 +594,14 @@ function applyLobbyConfig(cfg) {
 // ─── lobby / WebSocket ────────────────────────────────────────────────────────
 function $id(id) { return document.getElementById(id); }
 function setStatus(t) { $id('lobby-status').textContent = t; }
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function setPlayerList(players) {
   lastPlayerCount = players.length;
   $id('player-list').innerHTML = players
-    .map(p => `<span style="color:${PALETTE_HEX[p.colorIdx]}">${p.name}</span>`)
+    .map(p => `<span style="color:${PALETTE_HEX[p.colorIdx]}">${escHtml(p.name)}</span>`)
     .join(' · ');
 }
 
