@@ -646,6 +646,11 @@ function makeRoom(id, seed, config) {
     // fetched by. `moves` buffers the applied move stream so we can persist the
     // whole race for replay when it ends. Both reset for each new race in a room.
     raceId: null, moves: [],
+    // Track which colorIdx values (0–3) and which starting lanes are currently
+    // assigned so player churn (join/leave/rejoin) never produces duplicates.
+    // Released in the 'close' handler when a player leaves.
+    usedColors: new Set(),
+    usedLanes:  new Set(),
   };
 }
 
@@ -798,11 +803,12 @@ function startCountdown(room, roomId) {
   room.started = true;
   lockLobby(room); // no more joiners once the countdown begins
   let count = 3;
-  // Store the handle on room so it can be cleared if the room is torn down
-  // (e.g. all players disconnect) before the countdown finishes.
+  // Store handle on room so it can be cleared if the room tears down mid-countdown.
+  // Check count > 0 before broadcasting so clients never receive count=0 ("Starting in 0…").
   room.countdownInterval = setInterval(() => {
-    broadcast(roomId, { type: 'countdown', count });
-    if (count-- <= 0) {
+    if (count > 0) {
+      broadcast(roomId, { type: 'countdown', count: count-- });
+    } else {
       clearInterval(room.countdownInterval);
       room.countdownInterval = null;
       beginRace(room);
@@ -1067,8 +1073,27 @@ async function main() {
         }
 
         const playerId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-        const colorIdx = room.players.size % 4;
-        room.players.set(playerId, makePlayer(playerId, name, colorIdx, room.config.lanes));
+
+        // Pick the lowest colorIdx (0–3) not currently in use; if all four are
+        // taken (rooms with 5+ players) fall back to cycling by join order.
+        let colorIdx = 0;
+        for (let i = 0; i < 4; i++) {
+          if (!room.usedColors.has(i)) { colorIdx = i; break; }
+          if (i === 3) colorIdx = room.players.size % 4; // all taken — wrap
+        }
+        room.usedColors.add(colorIdx);
+
+        // Pick the lowest starting lane not currently in use; if all lanes are
+        // taken fall back to the colorIdx-derived default.
+        let startLane = colorIdx % room.config.lanes;
+        for (let i = 0; i < room.config.lanes; i++) {
+          if (!room.usedLanes.has(i)) { startLane = i; break; }
+        }
+        room.usedLanes.add(startLane);
+
+        const newPlayer = makePlayer(playerId, name, colorIdx, room.config.lanes);
+        newPlayer.lane = startLane; // override with the explicitly assigned lane
+        room.players.set(playerId, newPlayer);
         clients.set(ws, { playerId, roomId, name });
         // First player in the room is its host — only they may start the match.
         if (!room.hostId) room.hostId = playerId;
@@ -1207,6 +1232,13 @@ async function main() {
       if (info) {
         const room = rooms.get(info.roomId);
         if (room) {
+          // Release the player's colour and lane back into the pool so a later
+          // joiner can reuse them without a duplicate appearing in the room.
+          const leaving = room.players.get(info.playerId);
+          if (leaving) {
+            room.usedColors.delete(leaving.colorIdx);
+            room.usedLanes.delete(leaving.lane);
+          }
           room.players.delete(info.playerId);
           // If the host bailed, promote the next remaining player so an open
           // lobby always has someone who can start it.
