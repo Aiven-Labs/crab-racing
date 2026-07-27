@@ -607,7 +607,11 @@ function sendTo(ws, msg) {
 /** Server-authoritative move application. Returns a result object. */
 function applyMove(room, playerId, dx, dlane) {
   const p = room.players.get(playerId);
-  if (!p || p.won || !room.started || room.finished) return { ok: false };
+  // Guard on startedAt, not started. room.started flips true at the top of
+  // startCountdown (before the 'go'), but startedAt is only stamped by
+  // beginRace when the countdown actually completes. A move processed before
+  // startedAt is set would have raceTimeCs return 0 → unbeatable finish time.
+  if (!p || p.won || !room.startedAt || room.finished) return { ok: false };
 
   // Consume a stun turn instead of moving
   if (p.stunTurns > 0) {
@@ -647,7 +651,8 @@ function applyMove(room, playerId, dx, dlane) {
 }
 
 /** Race time in centiseconds since the 'go', from the server's authoritative
- *  clock. 0 if the race hasn't started (shouldn't happen for a valid move). */
+ *  clock. applyMove guards on startedAt before calling this, so the fallback
+ *  should never be reached in normal flow — it's a last-resort safety net. */
 function raceTimeCs(room) {
   if (!room.startedAt) return 0;
   return Math.round((Date.now() - room.startedAt) / 10);
