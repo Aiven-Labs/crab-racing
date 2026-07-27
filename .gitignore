@@ -15,3 +15,8 @@ certs/
 *.key
 *.cert
 fnox.toml
+
+# Generated Prometheus config — contains basic-auth credentials (rendered from
+# prometheus/prometheus.yml.tmpl by scripts/setup-prometheus.sh). ca.pem is
+# already covered by *.pem above.
+prometheus/prometheus.yml
