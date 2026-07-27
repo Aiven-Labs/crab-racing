@@ -501,23 +501,56 @@ function isValidTimeCs(timeCs) {
 async function recordScore(name, timeCs, colorIdx, seed = '', raceId = '') {
   if (valkey?.status !== 'ready' || !name || !isValidTimeCs(timeCs)) return;
   try {
+    // Pre-read (outside the pipeline) to identify which side-hash entry to
+    // prune.  After the new entry is added the set can hold at most LB_MAX+1
+    // members; zremrangebyrank then drops the single rank-0 member (current
+    // worst) when the set was already at capacity.  Fetching both the size and
+    // the current worst in parallel keeps this to one round-trip.
+    const [currentSize, currentWorst] = await Promise.all([
+      valkey.zcard(LB_KEY),
+      valkey.zrange(LB_KEY, 0, 0),
+    ]);
+    // The member evicted from the side-hashes is the current rank-0 entry,
+    // but only when the set is full AND it belongs to a different player.
+    // When name === currentWorst[0], GT either improves the score in-place
+    // (no eviction, count unchanged) or is a no-op — either way nothing
+    // is removed.  Note: if a brand-new player submits a time worse than
+    // everything on a full board they are immediately evicted; their hset
+    // below is undone by the hdel that follows it in the pipeline.
+    const candidateEvict =
+      (currentSize >= LB_MAX && currentWorst.length > 0 && currentWorst[0] !== name)
+        ? currentWorst[0]
+        : null;
+
+    // Wrap all writes in a single pipeline (MULTI/EXEC) so concurrent
+    // finishers cannot interleave their zadd/hset/trim sequences.
+    const tx = valkey.multi();
+
     // Keep the player's *best* time only: GT means "update only if greater",
     // so we store the negated time and a fastest run wins the highest score.
-    await valkey.zadd(LB_KEY, 'GT', -timeCs, name);
+    tx.zadd(LB_KEY, 'GT', -timeCs, name);
     // Remember the crab colour for this name so the board can render it.
-    await valkey.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
+    tx.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
     // Remember the seed the run was raced on. Skip when unknown so we don't
     // overwrite a real seed with an empty one from an older client.
-    if (seed)   await valkey.hset(LB_SEED_KEY, name, seed);
+    if (seed)   tx.hset(LB_SEED_KEY, name, seed);
     // Remember which recorded race this run was, so the board can link to a
     // replay. Same skip-when-unknown rule as the seed.
-    if (raceId) await valkey.hset(LB_RACE_KEY, name, raceId);
+    if (raceId) tx.hset(LB_RACE_KEY, name, raceId);
     // Trim to the top LB_MAX (drop everything below rank LB_MAX).
-    await valkey.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
-    await valkey.expire(LB_KEY, LB_TTL_SECS);
-    await valkey.expire(LB_COLOR_KEY, LB_TTL_SECS);
-    await valkey.expire(LB_SEED_KEY, LB_TTL_SECS);
-    await valkey.expire(LB_RACE_KEY, LB_TTL_SECS);
+    tx.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
+    // Prune the side-hashes for the evicted member so they don't grow
+    // unbounded (one distinct player name per submission until the 1h TTL).
+    if (candidateEvict) {
+      tx.hdel(LB_COLOR_KEY, candidateEvict);
+      tx.hdel(LB_SEED_KEY, candidateEvict);
+      tx.hdel(LB_RACE_KEY, candidateEvict);
+    }
+    tx.expire(LB_KEY, LB_TTL_SECS);
+    tx.expire(LB_COLOR_KEY, LB_TTL_SECS);
+    tx.expire(LB_SEED_KEY, LB_TTL_SECS);
+    tx.expire(LB_RACE_KEY, LB_TTL_SECS);
+    await tx.exec();
   } catch (err) {
     console.error('[valkey] recordScore error:', err.message);
   }
@@ -607,7 +640,7 @@ function makeRoom(id, seed, config) {
     hostId: null, lockTimer: null, seed, config, obsMap: map, obstacles,
     // Race timing / finish tracking. startedAt is stamped when the 'go' fires,
     // so finish times are measured server-side from a single authoritative clock.
-    startedAt: null, dnfTimer: null, finishCount: 0,
+    startedAt: null, dnfTimer: null, countdownInterval: null, finishCount: 0,
     // raceId is a per-race UUID stamped when the race actually begins (go/solo).
     // It's the Kafka message key for this race's moves and the id a replay is
     // fetched by. `moves` buffers the applied move stream so we can persist the
@@ -765,10 +798,13 @@ function startCountdown(room, roomId) {
   room.started = true;
   lockLobby(room); // no more joiners once the countdown begins
   let count = 3;
-  const tick = setInterval(() => {
+  // Store the handle on room so it can be cleared if the room is torn down
+  // (e.g. all players disconnect) before the countdown finishes.
+  room.countdownInterval = setInterval(() => {
     broadcast(roomId, { type: 'countdown', count });
     if (count-- <= 0) {
-      clearInterval(tick);
+      clearInterval(room.countdownInterval);
+      room.countdownInterval = null;
       beginRace(room);
       broadcast(roomId, { type: 'go', raceId: room.raceId, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
     }
@@ -1192,8 +1228,9 @@ async function main() {
             endRace(room, info.roomId);
           }
           if (room.players.size === 0) {
-            if (room.lockTimer) clearTimeout(room.lockTimer);
-            if (room.dnfTimer)  clearTimeout(room.dnfTimer);
+            if (room.lockTimer)        clearTimeout(room.lockTimer);
+            if (room.dnfTimer)         clearTimeout(room.dnfTimer);
+            if (room.countdownInterval) clearInterval(room.countdownInterval);
             rooms.delete(info.roomId);
             console.log(`[room:${info.roomId}] closed (empty)`);
           }
