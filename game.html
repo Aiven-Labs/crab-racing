@@ -52,6 +52,22 @@
   #lobby-status { font-size: 13px; color: #5898b8; min-height: 16px; }
   #player-list  { font-size: 13px; min-height: 16px; letter-spacing: 1px; }
   #multi-section { display: flex; flex-direction: column; gap: 6px; }
+
+  /* ── Crab colour carousel ──────────────────────────── */
+  #color-picker { display: flex; gap: 10px; justify-content: center; align-items: center; }
+  #color-picker .cp-arrow {
+    width: auto; padding: 6px 12px; font-size: 18px; line-height: 1;
+    /* inherits #lobby button styling; just size it as an arrow control */
+  }
+  #color-picker .cp-preview {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    min-width: 72px;
+  }
+  #color-picker .cp-crab {
+    width: 48px; height: 48px; image-rendering: pixelated;
+    border: 2px solid #2a5070; background: #0e1828;
+  }
+  #color-picker .cp-name { font-size: 12px; color: #7ea8c8; letter-spacing: 1px; }
   .lrow { display: flex; gap: 6px; }
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
@@ -133,6 +149,8 @@
     <h1>🦀 CRAB RACING</h1>
     <div class="sub">COASTAL SURVIVAL RACE</div>
     <button id="btn-help">❓ How to Play</button>
+    <!-- Pick your crab colour (solo). Swatches are built by buildColorPicker(). -->
+    <div id="color-picker" title="Choose your crab"></div>
     <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
     <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
          Join (the room creator's settings fix the room, later joiners inherit). -->
@@ -205,7 +223,7 @@
 // ─── multiplayer globals ───────────────────────────────────────────────────────
 let ws           = null;
 let myPlayerId   = null;
-let myColorIdx   = 0;
+let myColorIdx   = 0;   // chosen crab colour (solo); set from saved pref at load
 let multiMode    = false;
 let multiPlayers = [];    // player list received with 'go' message
 let gameScene    = null;  // set by RaceScene.create()
@@ -397,8 +415,56 @@ function mulberry32(a) {
   };
 }
 
-// Deterministically place obstacles. At most one per cell column, so at least
-// two lanes are always open — the track is never fully blocked.
+// Guarantee the track is walkable: carve out the fewest wall obstacles needed so
+// an orthogonal path (crabs move one cell OR one lane per turn — never diagonally)
+// exists from the start to the finish line.
+//
+// A "wall" is any cell a crab can never sit on going forward: `block` (rock —
+// entry refused) AND `push` (tourist — kicks you back a cell, so with no free lane
+// to sidestep into you loop forever one cell short). Stun cells (hole/jelly/net)
+// are NOT walls: they only cost turns, so any wall-free path is always traversable.
+// "One obstacle per column" is NOT enough on its own — staggered walls in adjacent
+// columns can seal the track, and at 1 lane a single push is an inescapable trap.
+// Fully deterministic (no rng), so client and server stay in sync — keep
+// byte-for-byte identical to server.js's ensurePassable.
+function ensurePassable(list, lanes, finishCell) {
+  const isWall = (o) => o.effect === 'block' || o.effect === 'push';
+  const wallAt = new Map();           // packed cell*lanes+lane → obstacle index
+  list.forEach((o, i) => { if (isWall(o)) wallAt.set(o.cell * lanes + o.lane, i); });
+  const removed = new Set();          // packed keys of walls we've carved out
+  for (;;) {
+    // Flood-fill the free cells reachable from the start; a crossing exists once
+    // we touch a cell at/after the finish line. All start lanes at cell 0 are
+    // seeded (the run-up before startCell is always obstacle-free anyway).
+    const seen = new Set(), queue = [];
+    for (let l = 0; l < lanes; l++) { const k = 0 * lanes + l; seen.add(k); queue.push([0, l]); }
+    const frontier = new Set();       // walls touching the reachable region
+    let reached = false;
+    for (let h = 0; h < queue.length; h++) {
+      const [c, l] = queue[h];
+      if (c >= finishCell) { reached = true; break; }
+      for (const [nc, nl] of [[c + 1, l], [c - 1, l], [c, l + 1], [c, l - 1]]) {
+        if (nc < 0 || nc > finishCell || nl < 0 || nl >= lanes) continue;
+        const k = nc * lanes + nl;
+        if (seen.has(k)) continue;
+        if (wallAt.has(k) && !removed.has(k)) { frontier.add(k); continue; }
+        seen.add(k); queue.push([nc, nl]);
+      }
+    }
+    if (reached || frontier.size === 0) break;
+    // Carve out the lowest-keyed blocking wall on the frontier (deterministic)
+    // and re-flood; repeat until the finish is reachable.
+    let victim = Infinity;
+    for (const k of frontier) if (k < victim) victim = k;
+    removed.add(victim);
+  }
+  return removed.size
+    ? list.filter(o => !(isWall(o) && removed.has(o.cell * lanes + o.lane)))
+    : list;
+}
+
+// Deterministically place obstacles. At most one per cell column; ensurePassable
+// then guarantees a walkable path so no seed can ever hard-block the track.
 function generateObstacles(seed, opts) {
   const { totalCells, lanes, startCell, finishCell, density = 0.38 } = opts;
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
@@ -410,7 +476,7 @@ function generateObstacles(seed, opts) {
     const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
     list.push({ cell, lane, ...kind });
   }
-  return list;
+  return ensurePassable(list, lanes, finishCell);
 }
 
 // Filled in by buildObstacles() once the seed for the race is known.
@@ -550,6 +616,61 @@ function buildObstacleToggles() {
   }).join('');
 }
 
+// ─── crab colour picker ──────────────────────────────────────────────────────
+// Your chosen crab colour (index into CRAB_PALETTES). Persisted so it sticks
+// between visits. Applies to solo races (in multiplayer the server assigns colour
+// by join order). myColorIdx starts from the saved preference.
+function loadColorPref() {
+  try { const n = parseInt(localStorage.getItem('crabColor'), 10);
+        return (n >= 0 && n < CRAB_PALETTES.length) ? n : 0; } catch { return 0; }
+}
+function saveColorPref(idx) { try { localStorage.setItem('crabColor', String(idx)); } catch {} }
+
+const CRAB_COLOR_NAMES = ['Blue', 'Red', 'Green', 'Purple'];
+
+// Carousel to choose your crab colour: ‹ arrow · preview crab + name · › arrow.
+// The arrows cycle myColorIdx through the palettes; the preview repaints in place.
+function buildColorPicker() {
+  const box = $id('color-picker');
+  if (!box) return;
+  box.innerHTML = '';
+
+  const prev = document.createElement('button');
+  prev.className = 'cp-arrow'; prev.textContent = '‹'; prev.title = 'Previous colour';
+
+  const preview = document.createElement('div');
+  preview.className = 'cp-preview';
+  const crab = makeCanvas(48, 48).canvas; // sized display canvas; painted by repaint()
+  crab.className = 'cp-crab';
+  const name = document.createElement('div');
+  name.className = 'cp-name';
+  preview.append(crab, name);
+
+  const next = document.createElement('button');
+  next.className = 'cp-arrow'; next.textContent = '›'; next.title = 'Next colour';
+
+  // Paint frame 0 of the current palette's crab into the preview + label it.
+  const repaint = () => {
+    const ctx = crab.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 48, 48);
+    const sheet = makeCrabSheet(CRAB_PALETTES[myColorIdx]); // returns the canvas
+    ctx.drawImage(sheet, 0, 0, 32, 32, 0, 0, 48, 48);
+    name.textContent = CRAB_COLOR_NAMES[myColorIdx] || `Colour ${myColorIdx}`;
+  };
+  const step = (d) => {
+    const n = CRAB_PALETTES.length;
+    myColorIdx = (myColorIdx + d + n) % n; // wrap around
+    saveColorPref(myColorIdx);
+    repaint();
+  };
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
+
+  box.append(prev, preview, next);
+  repaint();
+}
+
 // Sync the lanes/length input placeholders to the current default track, so a
 // blank field honestly shows the value it will inherit (which the deployed
 // game-config.json may have changed from the baked-in 3 / 46).
@@ -572,6 +693,10 @@ function refreshLobbyBaselines() {
 // Build the toggles immediately (DOM is ready — this script is at end of body) so
 // the settings panel is fully usable before the async config fetch resolves.
 refreshLobbyBaselines();
+
+// Restore the saved crab colour and build the picker.
+myColorIdx = loadColorPref();
+buildColorPicker();
 
 // Apply lobby overrides to the local track (solo races). Clamps + scales exactly
 // like the server so a solo track matches what a multiplayer room would build.
@@ -1244,9 +1369,14 @@ class RaceScene extends Phaser.Scene {
     // for a portable replay. Reset each race (create() re-runs on restart).
     this.soloMoves = [];
 
-    const key = 'crab_0';
+    // Crab colour: the player's chosen colour for a live race; the recorded run's
+    // colour when replaying a solo #replay so the replay looks like the original.
+    const colorIdx = (replayMode && pendingSoloReplay?.players?.[0]?.colorIdx != null)
+      ? pendingSoloReplay.players[0].colorIdx : (myColorIdx | 0);
+    this.soloColorIdx = colorIdx;
+    const key = `crab_${colorIdx}`;
     if (!this.textures.exists(key)) {
-      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[0]));
+      const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[colorIdx]));
       for (let i = 0; i < 4; i++) tex.add(i, 0, i * 32, 0, 32, 32);
     }
 
@@ -1262,9 +1392,9 @@ class RaceScene extends Phaser.Scene {
     this.crab = this.add.sprite(CELLR/2, trackTop + this.lane * CELLR + CELLR/2, key)
       .setFrame(0).setScale(RES);
 
-    if (!this.anims.exists('walk_0')) {
+    if (!this.anims.exists('walk_' + colorIdx)) {
       this.anims.create({
-        key: 'walk_0',
+        key: 'walk_' + colorIdx,
         frames: [0,1,2,3].map(i => ({ key, frame: i })),
         frameRate: 10, repeat: -1,
       });
@@ -1442,7 +1572,7 @@ class RaceScene extends Phaser.Scene {
     }
 
     this.busy = true;
-    if (dx !== 0) this.crab.play('walk_0');
+    if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
 
     this.tweens.add({
       targets:  this.crab,
