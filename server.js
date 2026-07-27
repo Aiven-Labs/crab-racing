@@ -1009,7 +1009,21 @@ async function main() {
         const room = rooms.get(info.roomId);
         if (!room || !room.raceId) return;
 
-        const { dx = 0, dlane = 0 } = msg;
+        // Validate move magnitude: each move must be exactly one step in at
+        // most one axis. Legal values for dx and dlane are each in {-1, 0, 1}
+        // and the two deltas must not both be non-zero (no diagonals).
+        // Reject anything outside this set — a client sending dx:1000 would
+        // skip straight to the finish line and bypass every obstacle.
+        const dx    = Number.isInteger(msg.dx)    ? msg.dx    : 0;
+        const dlane = Number.isInteger(msg.dlane) ? msg.dlane : 0;
+        if (dx < -1 || dx > 1 || dlane < -1 || dlane > 1) {
+          console.warn(`[move] rejected out-of-range delta from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+          return;
+        }
+        if (dx !== 0 && dlane !== 0) {
+          console.warn(`[move] rejected diagonal move from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+          return;
+        }
 
         // Publish to Kafka keyed on raceId so all of one race's moves share a
         // partition (→ total order for that race) and consecutive races in the
