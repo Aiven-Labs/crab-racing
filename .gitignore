@@ -20,3 +20,6 @@ fnox.toml
 # prometheus/prometheus.yml.tmpl by scripts/setup-prometheus.sh). ca.pem is
 # already covered by *.pem above.
 prometheus/prometheus.yml
+
+# Blog post drafts — kept local, not published to the repo
+docs/blog/
