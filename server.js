@@ -1051,12 +1051,25 @@ async function main() {
         return;
       }
 
-      // ── solo-multi: 1-player room, start immediately (for testing) ──────────
+      // ── solo-start: 1-player room, start immediately (no countdown) ─────────
+      // Strictly solo-only: reject if there is more than one player in the room
+      // so a non-host in a multiplayer lobby cannot use this path to bypass the
+      // host check and the countdown that start-match enforces. The sender must
+      // also be the host (the sole player of a solo room always is, but the
+      // explicit check closes the door on any edge-case where room state diverges).
       if (msg.type === 'solo-start') {
         const info = clients.get(ws);
         if (!info) return;
         const room = rooms.get(info.roomId);
         if (!room || room.started) return;
+        if (room.players.size !== 1) {
+          sendTo(ws, { type: 'error', msg: 'solo-start is not allowed in a multiplayer room' });
+          return;
+        }
+        if (info.playerId !== room.hostId) {
+          sendTo(ws, { type: 'error', msg: 'Only the lobby host can start the race' });
+          return;
+        }
         room.started = true;
         beginRace(room);
         lockLobby(room);
