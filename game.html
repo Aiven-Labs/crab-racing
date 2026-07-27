@@ -992,11 +992,13 @@ function goHome() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene = null;
   if (ws) { try { ws.close(); } catch {} ws = null; }
-  myPlayerId  = null;
-  multiMode   = false;
-  isHost      = false;
-  lobbyLocked = false;
-  replayMode  = false;
+  myPlayerId   = null;
+  myColorIdx   = loadColorPref(); // restore saved solo preference; server may have overridden it
+  multiMode    = false;
+  multiPlayers = [];              // clear stale roster from the previous multi-player race
+  isHost       = false;
+  lobbyLocked  = false;
+  replayMode   = false;
   currentRaceId = null;
   pendingSoloReplay = null;
   // Drop any ?replay= / #replay= from the address bar so a refresh doesn't
