@@ -415,8 +415,56 @@ function mulberry32(a) {
   };
 }
 
-// Deterministically place obstacles. At most one per cell column, so at least
-// two lanes are always open — the track is never fully blocked.
+// Guarantee the track is walkable: carve out the fewest wall obstacles needed so
+// an orthogonal path (crabs move one cell OR one lane per turn — never diagonally)
+// exists from the start to the finish line.
+//
+// A "wall" is any cell a crab can never sit on going forward: `block` (rock —
+// entry refused) AND `push` (tourist — kicks you back a cell, so with no free lane
+// to sidestep into you loop forever one cell short). Stun cells (hole/jelly/net)
+// are NOT walls: they only cost turns, so any wall-free path is always traversable.
+// "One obstacle per column" is NOT enough on its own — staggered walls in adjacent
+// columns can seal the track, and at 1 lane a single push is an inescapable trap.
+// Fully deterministic (no rng), so client and server stay in sync — keep
+// byte-for-byte identical to server.js's ensurePassable.
+function ensurePassable(list, lanes, finishCell) {
+  const isWall = (o) => o.effect === 'block' || o.effect === 'push';
+  const wallAt = new Map();           // packed cell*lanes+lane → obstacle index
+  list.forEach((o, i) => { if (isWall(o)) wallAt.set(o.cell * lanes + o.lane, i); });
+  const removed = new Set();          // packed keys of walls we've carved out
+  for (;;) {
+    // Flood-fill the free cells reachable from the start; a crossing exists once
+    // we touch a cell at/after the finish line. All start lanes at cell 0 are
+    // seeded (the run-up before startCell is always obstacle-free anyway).
+    const seen = new Set(), queue = [];
+    for (let l = 0; l < lanes; l++) { const k = 0 * lanes + l; seen.add(k); queue.push([0, l]); }
+    const frontier = new Set();       // walls touching the reachable region
+    let reached = false;
+    for (let h = 0; h < queue.length; h++) {
+      const [c, l] = queue[h];
+      if (c >= finishCell) { reached = true; break; }
+      for (const [nc, nl] of [[c + 1, l], [c - 1, l], [c, l + 1], [c, l - 1]]) {
+        if (nc < 0 || nc > finishCell || nl < 0 || nl >= lanes) continue;
+        const k = nc * lanes + nl;
+        if (seen.has(k)) continue;
+        if (wallAt.has(k) && !removed.has(k)) { frontier.add(k); continue; }
+        seen.add(k); queue.push([nc, nl]);
+      }
+    }
+    if (reached || frontier.size === 0) break;
+    // Carve out the lowest-keyed blocking wall on the frontier (deterministic)
+    // and re-flood; repeat until the finish is reachable.
+    let victim = Infinity;
+    for (const k of frontier) if (k < victim) victim = k;
+    removed.add(victim);
+  }
+  return removed.size
+    ? list.filter(o => !(isWall(o) && removed.has(o.cell * lanes + o.lane)))
+    : list;
+}
+
+// Deterministically place obstacles. At most one per cell column; ensurePassable
+// then guarantees a walkable path so no seed can ever hard-block the track.
 function generateObstacles(seed, opts) {
   const { totalCells, lanes, startCell, finishCell, density = 0.38 } = opts;
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
@@ -428,7 +476,7 @@ function generateObstacles(seed, opts) {
     const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
     list.push({ cell, lane, ...kind });
   }
-  return list;
+  return ensurePassable(list, lanes, finishCell);
 }
 
 // Filled in by buildObstacles() once the seed for the race is known.
