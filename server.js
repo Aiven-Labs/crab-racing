@@ -800,6 +800,11 @@ function beginRace(room) {
 
 /** 3-2-1 countdown, then broadcast 'go' */
 function startCountdown(room, roomId) {
+  // Defensive guard: the start-match handler validates this before calling us,
+  // but if that check is ever bypassed we must not lock the room with too few
+  // players.  Returning here leaves the room in its pre-start state so players
+  // can keep joining and the host can retry.
+  if (room.players.size < 2) return;
   room.started = true;
   lockLobby(room); // no more joiners once the countdown begins
   let count = 3;
