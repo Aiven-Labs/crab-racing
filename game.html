@@ -72,6 +72,16 @@
   .lrow input  { flex: 1; }
   .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
 
+  /* ── Custom seed toggle ───────────────────────────────── */
+  #seed-section { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
+  #seed-section > summary {
+    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
+    padding: 8px 0; list-style: none; user-select: none;
+  }
+  #seed-section > summary::before { content: '# '; }
+  #seed-section[open] > summary { color: #a0c8e8; }
+  #seed-section .seed-body { padding-bottom: 10px; }
+
   /* ── Track settings (per-lobby) ────────────────────── */
   #track-settings { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
   #track-settings > summary {
@@ -151,7 +161,12 @@
     <button id="btn-help">❓ How to Play</button>
     <!-- Pick your crab colour (solo). Swatches are built by buildColorPicker(). -->
     <div id="color-picker" title="Choose your crab"></div>
-    <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+    <details id="seed-section">
+      <summary>Use custom seed</summary>
+      <div class="seed-body">
+        <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+      </div>
+    </details>
     <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
          Join (the room creator's settings fix the room, later joiners inherit). -->
     <details id="track-settings">
