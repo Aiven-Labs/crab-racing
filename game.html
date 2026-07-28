@@ -1873,6 +1873,10 @@ class RaceScene extends Phaser.Scene {
   // ── onOtherFinish (multiplayer, another crab) ───────────────────────────────
   onOtherFinish(name, place) {
     if (this.raceOver) return;
+    // If the local player has already finished, their "FINISHED Nth — waiting…"
+    // banner owns statusText. Don't overwrite it with the transient other-finish
+    // notification — the race-over results panel will supersede everything anyway.
+    if (this.won) return;
     this.statusText.setColor('#7ec8e3');
     this.statusText.setText(`${name} finished ${ordinal(place)}`);
     this.time.delayedCall(1800, () => {
