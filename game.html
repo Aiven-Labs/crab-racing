@@ -1671,6 +1671,7 @@ class RaceScene extends Phaser.Scene {
       const ty = this.trackTop + p.lane * CELLR + CELLR/2;
 
       if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
+        this.tweens.killTweensOf(spr);
         this.tweens.add({
           targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
           onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
