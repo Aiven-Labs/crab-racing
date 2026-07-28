@@ -99,6 +99,30 @@
   #cfg-obstacles input { width: auto !important; }
 
 
+  /* ── Room browser ─────────────────────────────────── */
+  #room-browser { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
+  #room-browser > summary {
+    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
+    padding: 8px 0; list-style: none; user-select: none;
+  }
+  #room-browser > summary::before { content: '⊞ '; }
+  #room-browser[open] > summary { color: #a0c8e8; }
+  #room-browser-body { padding-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+  #room-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-height: 18px; }
+  .room-entry {
+    display: flex; align-items: center; justify-content: space-between;
+    background: #0e1828; border: 1px solid #1e3050; padding: 5px 8px;
+    cursor: pointer; gap: 8px;
+  }
+  .room-entry:hover { border-color: #3a7090; background: #14202e; }
+  .room-entry .re-id   { color: #d0e8f8; font-weight: bold; }
+  .room-entry .re-meta { color: #5898b8; font-size: 12px; }
+  #room-list-status { font-size: 12px; color: #486880; min-height: 14px; }
+  #btn-refresh-rooms { font-size: 13px; padding: 6px 10px; }
+  #solo-autoclose-notice {
+    font-size: 12px; color: #c09830; min-height: 14px; text-align: center; letter-spacing: 1px;
+  }
+
   /* ── How-to-play modal ─────────────────────────────── */
   #btn-help { margin-top: 2px; }
   #help-modal {
@@ -186,6 +210,16 @@
     </details>
     <button id="btn-solo">Solo Race</button>
     <hr>
+    <!-- Browse active public rooms. Fetches GET /rooms; clicking a row fills in
+         the room code. Refresh button reloads the list. -->
+    <details id="room-browser">
+      <summary>Browse Rooms</summary>
+      <div id="room-browser-body">
+        <div id="room-list-status">Loading rooms…</div>
+        <div id="room-list"></div>
+        <button id="btn-refresh-rooms">↺ Refresh</button>
+      </div>
+    </details>
     <div id="multi-section">
       <input id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
       <input id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
@@ -195,6 +229,9 @@
       </div>
     </div>
     <div id="lobby-status">Enter a name &amp; room, then Join</div>
+    <!-- Shown to the host when the room has only 1 player and the 30s auto-close
+         timer is running. Disappears once a second player arrives. -->
+    <div id="solo-autoclose-notice" class="hidden"></div>
     <div id="player-list"></div>
     <!-- Shown to the lobby host once 2+ players are in, so they can start the
          race before the lobby's join window elapses. -->
@@ -792,11 +829,15 @@ function handleServerMsg(msg) {
       setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
       updateStartButton(msg.players.length);
+      // If we're the host and the room was just created, show the auto-close timer.
+      if (isHost && msg.soloAutocloseMs > 0) startSoloAutocloseCountdown(msg.soloAutocloseMs);
       break;
     case 'player-joined':
       setStatus(`${msg.players.length} player(s) ready`);
       setPlayerList(msg.players);
       updateStartButton(msg.players.length);
+      // A second player arrived — cancel any solo auto-close countdown.
+      cancelSoloAutocloseCountdown();
       break;
     case 'host-changed':
       // The previous host left; we may have been promoted.
@@ -872,6 +913,19 @@ function handleServerMsg(msg) {
           updateStartButton(msg.players.length);
         }
       }
+      break;
+    case 'solo-autoclose-cancelled':
+      // Server confirmed a second player joined — stop showing the auto-close notice.
+      cancelSoloAutocloseCountdown();
+      break;
+    case 'room-closed':
+      // Server auto-closed the room (nobody joined in time). Show the reason and
+      // clean up: close the socket and return to the fresh lobby.
+      cancelSoloAutocloseCountdown();
+      setStatus(`Room closed: ${msg.reason || 'Lobby expired.'}`);
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      myPlayerId = null;
+      isHost     = false;
       break;
     case 'error':
       setStatus(`⚠ ${msg.msg}`);
@@ -1008,6 +1062,106 @@ function joinMulti() {
   ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
 }
 
+// ─── room browser ─────────────────────────────────────────────────────────────
+// Fetch GET /rooms from the same origin that serves the page (or from the WS URL
+// host when the player has filled that field in). Rooms are displayed in a compact
+// list; clicking a row copies its roomId into the room-code input. A refresh
+// button reloads the list. The panel is a <details> so it starts collapsed and
+// doesn't dominate the lobby for players who already know their room code.
+
+function roomsBase() {
+  // Reuse leaderboardBase() — both derive an HTTP origin from the WS-URL field.
+  return leaderboardBase();
+}
+
+async function fetchRooms() {
+  const statusEl = $id('room-list-status');
+  const listEl   = $id('room-list');
+  if (!statusEl || !listEl) return;
+
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = '';
+
+  try {
+    const res = await fetch(`${roomsBase()}/rooms`);
+    if (!res.ok) { statusEl.textContent = `Error ${res.status}`; return; }
+    const rooms = await res.json();
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+      statusEl.textContent = 'No open rooms right now — create one by clicking Join!';
+      return;
+    }
+    statusEl.textContent = `${rooms.length} open room(s)`;
+    listEl.innerHTML = rooms.map(r => {
+      const age = r.ageSecs < 60
+        ? `${r.ageSecs}s ago`
+        : `${Math.floor(r.ageSecs / 60)}m ago`;
+      return `<div class="room-entry" data-roomid="${escHtml(r.roomId)}" tabindex="0"
+                   title="Click to use room code ${escHtml(r.roomId)}">
+        <span class="re-id">${escHtml(r.roomId)}</span>
+        <span class="re-meta">${escHtml(r.hostName)} · ${r.playerCount} player(s) · ${age}</span>
+      </div>`;
+    }).join('');
+
+    // Clicking a room entry fills the room-code input and collapses the panel.
+    listEl.querySelectorAll('.room-entry').forEach(el => {
+      const activate = () => {
+        const roomCodeInput = $id('room-code');
+        if (roomCodeInput) roomCodeInput.value = el.dataset.roomid;
+        const browser = $id('room-browser');
+        if (browser) browser.removeAttribute('open');
+      };
+      el.addEventListener('click', activate);
+      el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') activate(); });
+    });
+  } catch (err) {
+    statusEl.textContent = 'Could not load rooms — is the server running?';
+  }
+}
+
+// Auto-fetch rooms when the panel is opened; also wire the refresh button.
+// These run immediately (script is at end of body, DOM already parsed).
+(function wireRoomBrowser() {
+  const browser    = $id('room-browser');
+  const btnRefresh = $id('btn-refresh-rooms');
+  if (browser)    browser.addEventListener('toggle', () => { if (browser.open) fetchRooms(); });
+  if (btnRefresh) btnRefresh.addEventListener('click', fetchRooms);
+})();
+
+// ─── solo auto-close countdown ────────────────────────────────────────────────
+// When a player creates a room and no second player joins within 30 s the server
+// closes the room. Show the host a live countdown so they understand why the
+// lobby disappears and aren't left confused. Cleared by solo-autoclose-cancelled.
+
+let _soloAutocloseInterval = null;
+
+function startSoloAutocloseCountdown(totalMs) {
+  const notice = $id('solo-autoclose-notice');
+  if (!notice) return;
+  if (_soloAutocloseInterval) clearInterval(_soloAutocloseInterval);
+
+  const deadline = Date.now() + totalMs;
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    notice.textContent = `Room auto-closes in ${left}s if nobody joins`;
+    notice.classList.remove('hidden');
+    if (left <= 0) {
+      clearInterval(_soloAutocloseInterval);
+      _soloAutocloseInterval = null;
+    }
+  };
+  tick();
+  _soloAutocloseInterval = setInterval(tick, 1000);
+}
+
+function cancelSoloAutocloseCountdown() {
+  if (_soloAutocloseInterval) {
+    clearInterval(_soloAutocloseInterval);
+    _soloAutocloseInterval = null;
+  }
+  const notice = $id('solo-autoclose-notice');
+  if (notice) { notice.textContent = ''; notice.classList.add('hidden'); }
+}
+
 // Watch a recorded race. Opens a spectator WebSocket and asks the server to
 // stream the race back with `watch`. The replay arrives as the same
 // go/state/finish/race-over frames a live multiplayer race uses, so the existing
@@ -1093,6 +1247,7 @@ function goHome() {
   currentRaceId = null;
   soloToken     = null;           // discard any unused solo race token
   pendingSoloReplay = null;
+  cancelSoloAutocloseCountdown(); // clear any lingering room auto-close notice
   // Drop any ?replay= / #replay= from the address bar so a refresh doesn't
   // re-launch the replay.
   if (location.search || location.hash) history.replaceState(null, '', location.pathname);

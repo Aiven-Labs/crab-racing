@@ -146,6 +146,31 @@ function serveStatic(req, res) {
     res.writeHead(405); res.end('405 Method Not Allowed'); return;
   }
 
+  // Room browser — GET /rooms returns a JSON array of joinable (unlocked, not yet
+  // started) rooms so players can discover active lobbies without knowing the exact
+  // room code. Only public state is exposed: no seeds, no internal timers, no configs.
+  // A room is "locked" here when it has started or the join window has elapsed.
+  if (route === '/rooms') {
+    if (req.method !== 'GET') { res.writeHead(405); res.end('405 Method Not Allowed'); return; }
+    const now = Date.now();
+    const list = [];
+    for (const [roomId, room] of rooms) {
+      // Only surface rooms that are still joinable.
+      if (room.started || room.locked) continue;
+      // Derive the host's display name from the player map.
+      const host = room.hostId ? (room.players.get(room.hostId)?.name ?? 'Unknown') : 'Unknown';
+      list.push({
+        roomId,
+        playerCount: room.players.size,
+        hostName:    host,
+        locked:      false,                          // always false here (filtered above)
+        ageSecs:     Math.floor((now - room.createdAt) / 1000),
+      });
+    }
+    sendJson(res, 200, list);
+    return;
+  }
+
   // Leaderboard API — GET reads the board, POST records a finish (solo only;
   // multiplayer finishes are recorded server-side via the Kafka consumer).
   // The board is per-seed: GET requires ?seed= and returns only scores from
@@ -731,11 +756,17 @@ const clients = new Map(); // ws     → { playerId, roomId, name }
 // match. Locked lobbies reject new joiners (see the join handler).
 const LOBBY_OPEN_MS = 60 * 1000;
 
+// If the host hasn't started within this window AND only one player is present,
+// auto-close the room (nobody joined — no reason to keep it open).
+const SOLO_AUTOCLOSE_MS = 30 * 1000;
+
 function makeRoom(id, seed, config) {
   const { obstacles, map } = buildObstacles(seed, config);
   return {
     id, players: new Map(), started: false, finished: false, locked: false,
     hostId: null, lockTimer: null, seed, config, obsMap: map, obstacles,
+    // Timestamp when the room was created — exposed via GET /rooms as age.
+    createdAt: Date.now(),
     // Race timing / finish tracking. startedAt is stamped when the 'go' fires,
     // so finish times are measured server-side from a single authoritative clock.
     startedAt: null, dnfTimer: null, countdownInterval: null, finishCount: 0,
@@ -744,6 +775,9 @@ function makeRoom(id, seed, config) {
     // fetched by. `moves` buffers the applied move stream so we can persist the
     // whole race for replay when it ends. Both reset for each new race in a room.
     raceId: null, moves: [],
+    // Timer that auto-closes a solo lobby if nobody else joins within
+    // SOLO_AUTOCLOSE_MS. Cleared as soon as a second player arrives.
+    soloAutocloseTimer: null,
     // Track which colorIdx values (0–3) and which starting lanes are currently
     // assigned so player churn (join/leave/rejoin) never produces duplicates.
     // Released in the 'close' handler when a player leaves.
@@ -1233,6 +1267,21 @@ async function main() {
             broadcast(roomId, { type: 'lobby-locked', players: snapshot(room) });
             console.log(`[room:${roomId}] lobby locked (timeout)`);
           }, LOBBY_OPEN_MS);
+
+          // Auto-close if nobody joins within SOLO_AUTOCLOSE_MS. The timer is
+          // cancelled as soon as a second player arrives (see below). This keeps
+          // stale solo lobbies from lingering in the room list forever.
+          room.soloAutocloseTimer = setTimeout(() => {
+            if (room.players.size <= 1 && !room.started) {
+              if (room.lockTimer)        clearTimeout(room.lockTimer);
+              if (room.dnfTimer)         clearTimeout(room.dnfTimer);
+              if (room.countdownInterval) clearInterval(room.countdownInterval);
+              // Notify the lone host before evicting them.
+              broadcast(roomId, { type: 'room-closed', reason: 'No players joined within 30 seconds.' });
+              rooms.delete(roomId);
+              console.log(`[room:${roomId}] auto-closed (no joiners within ${SOLO_AUTOCLOSE_MS / 1000}s)`);
+            }
+          }, SOLO_AUTOCLOSE_MS);
         }
 
         if (room.started || room.locked) {
@@ -1267,10 +1316,24 @@ async function main() {
         // First player in the room is its host — only they may start the match.
         if (!room.hostId) room.hostId = playerId;
 
+        // A second player arrived — the solo auto-close is no longer needed.
+        // Broadcast the cancellation so the host's countdown UI disappears.
+        if (room.players.size >= 2 && room.soloAutocloseTimer) {
+          clearTimeout(room.soloAutocloseTimer);
+          room.soloAutocloseTimer = null;
+          broadcast(roomId, { type: 'solo-autoclose-cancelled' });
+        }
+
         sendTo(ws, {
           type: 'joined', playerId, colorIdx, seed: room.seed,
           config: configForClient(room.config), players: snapshot(room),
           isHost: playerId === room.hostId, opensInMs: LOBBY_OPEN_MS,
+          // Remaining solo auto-close window (ms), so the host can show a countdown.
+          // Calculated from room.createdAt so even a slightly-late join gets the
+          // right remaining time. Zero once the timer is cleared (2+ players).
+          soloAutocloseMs: room.soloAutocloseTimer
+            ? Math.max(0, room.createdAt + SOLO_AUTOCLOSE_MS - Date.now())
+            : 0,
         });
         broadcast(roomId, { type: 'player-joined', name, players: snapshot(room) });
         console.log(`[room:${roomId}] ${name} joined (${room.players.size} players)`);
@@ -1429,9 +1492,10 @@ async function main() {
             endRace(room, info.roomId);
           }
           if (room.players.size === 0) {
-            if (room.lockTimer)        clearTimeout(room.lockTimer);
-            if (room.dnfTimer)         clearTimeout(room.dnfTimer);
+            if (room.lockTimer)         clearTimeout(room.lockTimer);
+            if (room.dnfTimer)          clearTimeout(room.dnfTimer);
             if (room.countdownInterval) clearInterval(room.countdownInterval);
+            if (room.soloAutocloseTimer) clearTimeout(room.soloAutocloseTimer);
             rooms.delete(info.roomId);
             console.log(`[room:${info.roomId}] closed (empty)`);
           }
