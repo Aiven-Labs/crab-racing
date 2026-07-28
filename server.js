@@ -1022,6 +1022,13 @@ async function main() {
           place:        result.place,
           finishTimeCs: result.finishTimeCs,
         });
+        // Record this finish on the leaderboard. startedAt is guaranteed by
+        // applyMove (it guards on it before awarding a win); the extra check
+        // here is defensive. Fire-and-forget — same pattern as saveRace — so
+        // a Valkey hiccup never blocks the Kafka consumer loop.
+        if (p && room.startedAt && result.finishTimeCs != null) {
+          recordScore(p.name, result.finishTimeCs, p.colorIdx, room.seed, room.raceId);
+        }
         onFinish(room, event.roomId);
       }
     },
