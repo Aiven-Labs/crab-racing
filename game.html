@@ -813,7 +813,12 @@ function handleServerMsg(msg) {
       setStatus(`Starting in ${msg.count}…`);
       break;
     case 'go':
-      multiPlayers = msg.players;
+      // Destroy any leftover Phaser game (e.g. the post-race panel from a prior
+      // round) before starting the new one. On the very first 'go' _phaserGame
+      // is null, so this branch is a no-op then.
+      if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
+      gameScene     = null;
+      multiPlayers  = msg.players;
       currentRaceId = msg.raceId || null; // recorded-race handle for share/replay
       if (msg.config) applyGameConfig(msg.config); // authoritative track config
       if (msg.seed != null) buildObstacles(msg.seed); // authoritative seed for the race
@@ -837,6 +842,21 @@ function handleServerMsg(msg) {
     case 'race-over':
       // Everyone finished or the DNF window closed — show the final results.
       if (gameScene) gameScene.onRaceOver(msg.results);
+      break;
+    case 'room-reset':
+      // The server reset the room after the race; update local state so the
+      // lobby is ready when the player clicks "Back to Lobby".
+      if (msg.config) applyGameConfig(msg.config);
+      if (msg.seed != null) buildObstacles(msg.seed);
+      isHost      = msg.hostId === myPlayerId;
+      lobbyLocked = false;
+      if (msg.players) {
+        setPlayerList(msg.players);
+        updateStartButton(msg.players.length);
+      }
+      setStatus(isHost
+        ? 'Race over — click Start Match to race again'
+        : 'Race over — waiting for host to start a new race…');
       break;
     case 'player-left':
       if (gameScene) {
@@ -1025,6 +1045,24 @@ function startGame(isMulti) {
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     scene: RaceScene,
   });
+}
+
+// Return to the in-room lobby after a multiplayer race: tears down the Phaser
+// game but keeps the WebSocket and room membership intact so the host can start
+// a new race with the same group. Players still in the room see the lobby UI;
+// clicking the 🏠 Home button (still visible) calls goHome() to leave entirely.
+function backToLobby() {
+  if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
+  gameScene         = null;
+  replayMode        = false;
+  currentRaceId     = null;
+  pendingSoloReplay = null;
+  // Keep btn-home visible — it calls goHome() and fully disconnects from the room.
+  $id('lobby').classList.remove('hidden');
+  setStatus(isHost
+    ? 'Race over — click Start Match to race again'
+    : 'Race over — waiting for host to start a new race…');
+  updateStartButton(lastPlayerCount);
 }
 
 // Tear down the current race (or replay) and return to the lobby. Fully destroys
@@ -1949,6 +1987,7 @@ class RaceScene extends Phaser.Scene {
   // ── onRaceOver (multiplayer) ────────────────────────────────────────────────
   // Everyone finished or the DNF window closed. Freeze the race and show the
   // final standings: finishers with times/places, then any DNF crabs.
+  // Post-race buttons: Race Again (host), Back to Lobby, Leave Room.
   onRaceOver(results) {
     if (this.raceOver) return;
     this.raceOver = true;
@@ -1965,7 +2004,10 @@ class RaceScene extends Phaser.Scene {
     // a replay) gets a Share button, which needs an extra row of panel height.
     const canShare = !!currentRaceId && !replayMode;
     const rowH   = 14;
-    const panelH = 44 + rows.length * rowH + (canShare ? 18 : 0);
+    // Extra height for post-race action buttons:
+    //   Race Again (host only, 18px) + Back to Lobby (18px) + Leave Room (18px) + 6px gap
+    const btnH   = (isHost ? 18 : 0) + 18 + 18 + 6;
+    const panelH = 44 + rows.length * rowH + (canShare ? 18 : 0) + btnH;
     this.add.rectangle(W/2, H/2, 300*RES, panelH*RES, 0x0a1828, 235).setScrollFactor(0);
     this.add.text(W/2, H/2 - (panelH/2 - 10)*RES, '🏁  RESULTS  🏁', {
       fontFamily: 'monospace', fontSize: fs(16),
@@ -2006,10 +2048,42 @@ class RaceScene extends Phaser.Scene {
       y += 18 * RES;
     }
 
-    this.add.text(W/2, H/2 + (panelH/2 - 8)*RES, 'tap 🏠 Home to play again', {
-      fontFamily: 'monospace', fontSize: fs(10), color: '#7ec8e3',
-      stroke: '#000', strokeThickness: 3,
-    }).setOrigin(0.5).setScrollFactor(0);
+    // ── post-race action buttons ────────────────────────────────────────────
+    y += 6 * RES; // small gap before buttons
+
+    // Race Again — host only. Sends start-match to kick off a new race with the
+    // same group without anyone leaving. The server already reset the room.
+    if (isHost) {
+      const raceAgainBtn = this.add.text(W/2, y, '🏁 Race Again', {
+        fontFamily: 'monospace', fontSize: fs(12),
+        color: '#90d090', backgroundColor: '#0a1820',
+        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+      raceAgainBtn.on('pointerup', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'start-match' }));
+        }
+      });
+      y += 18 * RES;
+    }
+
+    // Back to Lobby — returns to the in-room lobby overlay (keeps WS connection).
+    // From there the host can still hit Start Match; others can wait or leave.
+    const lobbyBtn = this.add.text(W/2, y, '🏠 Back to Lobby', {
+      fontFamily: 'monospace', fontSize: fs(12),
+      color: '#7ec8e3', backgroundColor: '#0a1820',
+      padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+    lobbyBtn.on('pointerup', () => backToLobby());
+    y += 18 * RES;
+
+    // Leave Room — fully disconnects and returns to the home screen.
+    const leaveBtn = this.add.text(W/2, y, '🚪 Leave Room', {
+      fontFamily: 'monospace', fontSize: fs(11),
+      color: '#c08060', backgroundColor: '#0a1820',
+      padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
+    }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+    leaveBtn.on('pointerup', () => goHome());
   }
 }
 

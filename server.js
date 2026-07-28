@@ -687,6 +687,9 @@ function makePlayer(id, name, colorIdx, lanes) {
     // Filled in when the crab crosses the line: finishTimeCs = race time in
     // centiseconds, place = 1-based finishing order. DNF crabs keep both null.
     finishTimeCs: null, place: null,
+    // Starting lane — stored so resetRoom can restore each player's position
+    // without re-running the original usedLanes assignment.
+    startLane: colorIdx % lanes,
   };
 }
 
@@ -782,6 +785,61 @@ function endRace(room, roomId) {
   // Persist the recorded move stream so this race can be replayed. Fire-and-
   // forget: replay is a nice-to-have, never a reason to hold up race teardown.
   saveRace(room);
+
+  // Reset the room back to lobby state so the same players can race again
+  // without disconnecting. The host-changed and player-list state are kept.
+  resetRoom(room, roomId);
+}
+
+/** Reset a room to lobby state after a race ends, keeping all connected players.
+ *  Generates a fresh seed for the next race and broadcasts `room-reset` so
+ *  clients can update their UI (show the lobby again, enable Start Match, etc.).
+ *  The existing disconnect-based cleanup (empty-room delete) is unchanged. */
+function resetRoom(room, roomId) {
+  // Fresh seed + obstacles for the next race.
+  const newSeed = (Math.floor(Math.random() * 0xffffffff)).toString();
+  room.seed = newSeed;
+  const { obstacles, map } = buildObstacles(newSeed, room.config);
+  room.obsMap    = map;
+  room.obstacles = obstacles;
+
+  // Clear all race-specific state.
+  room.started     = false;
+  room.finished    = false;
+  room.startedAt   = null;
+  room.raceId      = null;
+  room.moves       = [];
+  room.startRoster = null;
+  room.finishCount = 0;
+
+  // Re-open the lobby join window so late arrivals can join the next race.
+  if (room.lockTimer) clearTimeout(room.lockTimer);
+  room.locked = false;
+  room.lockTimer = setTimeout(() => {
+    lockLobby(room);
+    broadcast(roomId, { type: 'lobby-locked', players: snapshot(room) });
+    console.log(`[room:${roomId}] lobby locked (timeout after reset)`);
+  }, LOBBY_OPEN_MS);
+
+  // Restore every player to their starting position.
+  for (const p of room.players.values()) {
+    p.cell = 0;
+    p.lane = p.startLane ?? (p.colorIdx % room.config.lanes);
+    p.stunTurns  = 0;
+    p.won        = false;
+    p.finishTimeCs = null;
+    p.place        = null;
+  }
+
+  broadcast(roomId, {
+    type:      'room-reset',
+    seed:      newSeed,
+    config:    configForClient(room.config),
+    players:   snapshot(room),
+    hostId:    room.hostId,
+    opensInMs: LOBBY_OPEN_MS,
+  });
+  console.log(`[room:${roomId}] reset after race — ready for next race`);
 }
 
 /** Called when a crab finishes. Starts the DNF countdown on the first finish,
@@ -1124,6 +1182,7 @@ async function main() {
 
         const newPlayer = makePlayer(playerId, name, colorIdx, room.config.lanes);
         newPlayer.lane = startLane; // override with the explicitly assigned lane
+        newPlayer.startLane = startLane; // remembered so resetRoom can restore it
         room.players.set(playerId, newPlayer);
         clients.set(ws, { playerId, roomId, name });
         // First player in the room is its host — only they may start the match.
