@@ -67,7 +67,8 @@ function postLeaderboard(req, res) {
     // absent from older clients. Bounded like the other fields.
     const raceId   = body.raceId != null ? String(body.raceId).slice(0, 64) : '';
     await recordScore(name, timeCs, colorIdx, seed, raceId);
-    sendJson(res, 200, await getLeaderboard());
+    // Return the board for this same seed so the client can display it immediately.
+    sendJson(res, 200, await getLeaderboard(seed));
   });
 }
 
@@ -83,10 +84,14 @@ function serveStatic(req, res) {
   }
 
   // Leaderboard API — GET reads the board, POST records a finish.
-  // Used by both the lobby (home page) and the end screen, in solo and multi.
+  // The board is per-seed: GET requires ?seed= and returns only scores from
+  // that obstacle layout. Omitting seed returns 400 — mixing seeds would make
+  // times meaningless (different tracks = different difficulty).
   if (route === '/leaderboard') {
     if (req.method === 'POST') { postLeaderboard(req, res); return; }
-    getLeaderboard().then(board => sendJson(res, 200, board));
+    const seed = new URLSearchParams(req.url.split('?')[1] || '').get('seed') || '';
+    if (!seed) { sendJson(res, 400, { error: 'seed required' }); return; }
+    getLeaderboard(seed).then(board => sendJson(res, 200, board));
     return;
   }
 
@@ -157,12 +162,18 @@ function parseValkeyUri(uri) {
   const url = uri.replace(/^valkeys?:\/\//i, tls ? 'rediss://' : 'redis://');
   return { url, tls };
 }
-const LB_KEY      = 'leaderboard';        // sorted set: member = name, score = time (centiseconds)
-const LB_COLOR_KEY = 'leaderboard:colors'; // hash: name → crab colorIdx
-const LB_SEED_KEY  = 'leaderboard:seeds';  // hash: name → obstacle seed for that run
+// Per-seed Valkey key helpers — namespace every board entry by the obstacle seed
+// so scores raced on seed "abc" never compete with scores from seed "xyz".
+// The same data structure (sorted set + side-hashes) is kept; only the key names
+// change.  An empty seed is treated as "no board" — recordScore / getLeaderboard
+// both short-circuit when seed is absent, which can only happen with very old
+// clients that pre-date seed support.
+const lbKey      = (seed) => `lb:scores:${seed}`;  // sorted set: member=name, score=-timeCs
+const lbColorKey = (seed) => `lb:colors:${seed}`;  // hash: name → colorIdx
+const lbSeedKey  = (seed) => `lb:seeds:${seed}`;   // hash: name → seed (== seed, kept for compat)
+const lbRaceKey  = (seed) => `lb:races:${seed}`;   // hash: name → raceId of best run
 const LB_MAX      = 10;                    // keep only the top N
 const LB_TTL_SECS = 60 * 60;               // ephemeral: whole board expires after 1h idle
-const LB_RACE_KEY = 'leaderboard:races';   // hash: name → raceId of their best run
 // Replay records: race:<raceId> holds the full recorded race (seed, config,
 // roster, move stream). Kept longer than the board so a board link stays
 // watchable for a while after the run.
@@ -499,16 +510,21 @@ function isValidTimeCs(timeCs) {
  *  `seed` = the obstacle seed the run was raced on (for replay);
  *  `raceId` = the recorded race this run belongs to (for the watch link). */
 async function recordScore(name, timeCs, colorIdx, seed = '', raceId = '') {
-  if (valkey?.status !== 'ready' || !name || !isValidTimeCs(timeCs)) return;
+  // seed is required — without it we can't build the per-seed key and would
+  // write to a meaningless global bucket. Old clients (pre-seed) just get no entry.
+  if (valkey?.status !== 'ready' || !name || !isValidTimeCs(timeCs) || !seed) return;
   try {
+    // Build the per-seed Valkey keys for this run's obstacle layout.
+    const k = lbKey(seed), kC = lbColorKey(seed), kS = lbSeedKey(seed), kR = lbRaceKey(seed);
+
     // Pre-read (outside the pipeline) to identify which side-hash entry to
     // prune.  After the new entry is added the set can hold at most LB_MAX+1
     // members; zremrangebyrank then drops the single rank-0 member (current
     // worst) when the set was already at capacity.  Fetching both the size and
     // the current worst in parallel keeps this to one round-trip.
     const [currentSize, currentWorst] = await Promise.all([
-      valkey.zcard(LB_KEY),
-      valkey.zrange(LB_KEY, 0, 0),
+      valkey.zcard(k),
+      valkey.zrange(k, 0, 0),
     ]);
     // The member evicted from the side-hashes is the current rank-0 entry,
     // but only when the set is full AND it belongs to a different player.
@@ -528,54 +544,57 @@ async function recordScore(name, timeCs, colorIdx, seed = '', raceId = '') {
 
     // Keep the player's *best* time only: GT means "update only if greater",
     // so we store the negated time and a fastest run wins the highest score.
-    tx.zadd(LB_KEY, 'GT', -timeCs, name);
+    tx.zadd(k, 'GT', -timeCs, name);
     // Remember the crab colour for this name so the board can render it.
-    tx.hset(LB_COLOR_KEY, name, String(colorIdx | 0));
-    // Remember the seed the run was raced on. Skip when unknown so we don't
-    // overwrite a real seed with an empty one from an older client.
-    if (seed)   tx.hset(LB_SEED_KEY, name, seed);
+    tx.hset(kC, name, String(colorIdx | 0));
+    // Store the seed — since the key is already namespaced by seed, this is
+    // redundant, but kept so the returned board entries carry a seed field
+    // (consumers may use it for replay links).
+    tx.hset(kS, name, seed);
     // Remember which recorded race this run was, so the board can link to a
-    // replay. Same skip-when-unknown rule as the seed.
-    if (raceId) tx.hset(LB_RACE_KEY, name, raceId);
+    // replay.
+    if (raceId) tx.hset(kR, name, raceId);
     // Trim to the top LB_MAX (drop everything below rank LB_MAX).
-    tx.zremrangebyrank(LB_KEY, 0, -(LB_MAX + 1));
+    tx.zremrangebyrank(k, 0, -(LB_MAX + 1));
     // Prune the side-hashes for the evicted member so they don't grow
     // unbounded (one distinct player name per submission until the 1h TTL).
     if (candidateEvict) {
-      tx.hdel(LB_COLOR_KEY, candidateEvict);
-      tx.hdel(LB_SEED_KEY, candidateEvict);
-      tx.hdel(LB_RACE_KEY, candidateEvict);
+      tx.hdel(kC, candidateEvict);
+      tx.hdel(kS, candidateEvict);
+      tx.hdel(kR, candidateEvict);
     }
-    tx.expire(LB_KEY, LB_TTL_SECS);
-    tx.expire(LB_COLOR_KEY, LB_TTL_SECS);
-    tx.expire(LB_SEED_KEY, LB_TTL_SECS);
-    tx.expire(LB_RACE_KEY, LB_TTL_SECS);
+    tx.expire(k,  LB_TTL_SECS);
+    tx.expire(kC, LB_TTL_SECS);
+    tx.expire(kS, LB_TTL_SECS);
+    tx.expire(kR, LB_TTL_SECS);
     await tx.exec();
   } catch (err) {
     console.error('[valkey] recordScore error:', err.message);
   }
 }
 
-/** Top scores, fastest first: [{ name, timeCs, colorIdx, seed }, …]. */
-async function getLeaderboard() {
-  if (valkey?.status !== 'ready') return [];
+/** Top scores for `seed`, fastest first: [{ name, timeCs, colorIdx, seed, raceId }, …].
+ *  Returns an empty array when seed is absent or Valkey is unreachable. */
+async function getLeaderboard(seed) {
+  if (valkey?.status !== 'ready' || !seed) return [];
   try {
+    const k = lbKey(seed), kC = lbColorKey(seed), kS = lbSeedKey(seed), kR = lbRaceKey(seed);
     // zrevrange … WITHSCORES returns a flat [member, score, member, score, …].
-    const flat   = await valkey.zrevrange(LB_KEY, 0, LB_MAX - 1, 'WITHSCORES');
-    const colors = await valkey.hgetall(LB_COLOR_KEY); // { name: "colorIdx" }
-    const seeds  = await valkey.hgetall(LB_SEED_KEY);  // { name: "seed" }
-    const races  = await valkey.hgetall(LB_RACE_KEY);  // { name: "raceId" }
+    const flat   = await valkey.zrevrange(k, 0, LB_MAX - 1, 'WITHSCORES');
+    const colors = await valkey.hgetall(kC); // { name: "colorIdx" }
+    const seeds  = await valkey.hgetall(kS); // { name: "seed" }
+    const races  = await valkey.hgetall(kR); // { name: "raceId" }
     const board = [];
     for (let i = 0; i < flat.length; i += 2) {
       const name = flat[i];
       board.push({
         name,
         timeCs:   -Number(flat[i + 1]),
-        colorIdx: Number(colors[name]) || 0,
-        seed:     seeds[name] || '',
+        colorIdx: Number((colors || {})[name]) || 0,
+        seed:     (seeds  || {})[name] || seed,
         // raceId links a board row to its watchable replay (absent if the run
         // predates replay support or the record has since expired).
-        raceId:   races[name] || '',
+        raceId:   (races  || {})[name] || '',
       });
     }
     return board;
