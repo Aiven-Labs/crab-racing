@@ -211,8 +211,8 @@
     </ul>
 
     <h3>Obstacles &amp; Penalties</h3>
-    <p>Three lanes run the length of the beach — dodge trouble by switching
-      lanes. There's always a way through.</p>
+    <p>Lanes run the length of the beach — dodge trouble by switching lanes.
+      There's always a clear path to the finish.</p>
     <ul id="help-obstacles"></ul>
   </div>
 </div>
@@ -1040,10 +1040,13 @@ function buildHelpObstacles() {
   for (const kind of OBSTACLE_KINDS) {
     const { canvas, ctx } = makeCanvas(32, 32);
     drawers[kind.type](ctx);
+    const label = labels[kind.type] || kind.type;
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', label + ' obstacle');
     const li = document.createElement('li');
     const desc = document.createElement('div');
     desc.className = 'ob-desc';
-    desc.innerHTML = `<div class="ob-name">${labels[kind.type] || kind.type}</div>` +
+    desc.innerHTML = `<div class="ob-name">${escapeHtml(label)}</div>` +
                      `<div class="ob-pen">${escapeHtml(penaltyText(kind))}</div>`;
     li.append(canvas, desc);
     list.appendChild(li);
