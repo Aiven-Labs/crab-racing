@@ -466,14 +466,14 @@ function ensurePassable(list, lanes, finishCell) {
 // Deterministically place obstacles. At most one per cell column; ensurePassable
 // then guarantees a walkable path so no seed can ever hard-block the track.
 function generateObstacles(seed, opts) {
-  const { totalCells, lanes, startCell, finishCell, density = 0.38 } = opts;
+  const { totalCells, lanes, startCell, finishCell, density = 0.38, obstacleKinds = OBSTACLE_KINDS } = opts;
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
   const rng = mulberry32(seedNum);
   const list = [];
   for (let cell = startCell; cell < finishCell - 1; cell++) {
     if (rng() >= density) continue;
     const lane = Math.floor(rng() * lanes);
-    const kind = OBSTACLE_KINDS[Math.floor(rng() * OBSTACLE_KINDS.length)];
+    const kind = obstacleKinds[Math.floor(rng() * obstacleKinds.length)];
     list.push({ cell, lane, ...kind });
   }
   return ensurePassable(list, lanes, finishCell);
@@ -488,7 +488,7 @@ function buildObstacles(seed) {
   raceSeed  = seed;
   OBSTACLES = generateObstacles(seed, {
     totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
-    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY,
+    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
   });
   OBS_MAP = new Map(OBSTACLES.map(o => [`${o.cell},${o.lane}`, o]));
 }
