@@ -207,6 +207,7 @@
       <li><kbd>↓ / S</kbd><span>Shift down a lane</span></li>
       <li><kbd>Tap</kbd><span>Move forward</span></li>
       <li><kbd>Swipe ↑ / ↓</kbd><span>Shift lanes</span></li>
+      <li><kbd>Escape</kbd><span>Return to lobby</span></li>
     </ul>
 
     <h3>Obstacles &amp; Penalties</h3>
@@ -1055,7 +1056,15 @@ $id('btn-help-close').onclick = closeHelp;
 // Click the dim backdrop (but not the panel) or press Escape to dismiss.
 $id('help-modal').addEventListener('click', e => { if (e.target.id === 'help-modal') closeHelp(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !$id('help-modal').classList.contains('hidden')) closeHelp();
+  if (e.key !== 'Escape') return;
+  // Priority 1: close the help modal if it's open.
+  if (!$id('help-modal').classList.contains('hidden')) { closeHelp(); return; }
+  // Priority 2: bail to the lobby from any active race or replay, but never
+  // swallow Escape while the player is typing in a text input.
+  const tag = document.activeElement?.tagName;
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA' && $id('lobby').classList.contains('hidden')) {
+    goHome();
+  }
 });
 
 // Load server config, then — if opened with a replay share link — jump straight
