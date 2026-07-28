@@ -1333,6 +1333,16 @@ class RaceScene extends Phaser.Scene {
       }
     }
 
+    // Refresh solo token on every scene create (covers "race again" restarts where
+    // startSolo() is not re-invoked). Skipped in multiplayer and replay modes.
+    if (!multiMode && !replayMode) {
+      soloToken = null;
+      fetch(`${leaderboardBase()}/solo-token`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { soloToken = d?.token ?? null; })
+        .catch(() => {});
+    }
+
     // ── scene state ────────────────────────────────────────────
     const { width: W, height: H } = this.scale;
     // Centre the track when it fits the viewport; when there are more lanes than
