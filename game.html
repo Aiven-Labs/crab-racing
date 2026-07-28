@@ -959,12 +959,16 @@ function escapeHtml(s) {
 // settings — the fair ranking is the per-race results screen). We still POST so
 // the server keeps its records (incl. the seed + raceId for replay); the result
 // is intentionally not rendered anywhere.
-async function submitScore(name, timeCs, colorIdx, seed, raceId) {
+// playerId makes the server-side sorted-set member unique so two players
+// named "Crab" (the default) don't collide on a single slot. Pass myPlayerId
+// for multiplayer; omit (or pass '') for solo — the server generates a random
+// suffix in that case so every solo entry is still distinct.
+async function submitScore(name, timeCs, colorIdx, seed, raceId, playerId = '') {
   try {
     await fetch(`${leaderboardBase()}/leaderboard`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId }),
+      body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId, playerId }),
     });
   } catch { /* offline — score just isn't recorded */ }
 }
@@ -1870,7 +1874,7 @@ class RaceScene extends Phaser.Scene {
       const rec = buildSoloRecord(this.soloMoves || [], this.raceTime, playerName, myColorIdx);
       const isNewBest = saveBestGhost(seedStr, rec);
       if (isNewBest) { vsLine = ghostCs != null ? vsLine : '🏆 new best — race again to chase it!'; vsColor = '#90d090'; }
-      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '');
+      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', myPlayerId || '');
       panelH = 112 + (vsLine ? 16 : 0); // room for the Share button (+ vs line)
     }
 
@@ -1947,7 +1951,7 @@ class RaceScene extends Phaser.Scene {
     // on the home page anymore; kept for the server's records incl. replay.
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
     const timeCs = Number.isFinite(finishTimeCs) ? finishTimeCs : this.raceTime;
-    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '', currentRaceId || '');
+    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '', currentRaceId || '', myPlayerId || '');
 
     this.statusText.setColor('#e8e030');
     this.statusText.setText(`🦀 FINISHED ${ordinal(place)} — waiting for the rest…`);
