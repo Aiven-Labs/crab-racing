@@ -751,6 +751,12 @@ async function loadRace(raceId) {
 const rooms   = new Map(); // roomId → Room
 const clients = new Map(); // ws     → { playerId, roomId, name }
 
+// Reconnect tokens: token (UUID) → { playerId, roomId, timer }
+// Issued to each player at join time; a client that reconnects within
+// GRACE_PERIOD_MS can resume their slot without a full rejoin.
+const reconnectTokens = new Map();
+const GRACE_PERIOD_MS = 15 * 1000; // 15 seconds
+
 // How long a freshly-created lobby stays open for others to join. After this the
 // lobby locks automatically; the creator can also lock it early by starting the
 // match. Locked lobbies reject new joiners (see the join handler).
@@ -1317,23 +1323,23 @@ async function main() {
         if (!room.hostId) room.hostId = playerId;
 
         // A second player arrived — the solo auto-close is no longer needed.
-        // Broadcast the cancellation so the host's countdown UI disappears.
         if (room.players.size >= 2 && room.soloAutocloseTimer) {
           clearTimeout(room.soloAutocloseTimer);
           room.soloAutocloseTimer = null;
           broadcast(roomId, { type: 'solo-autoclose-cancelled' });
         }
+        // Mint a reconnect token so the client can resume after a brief disconnect.
+        const rcToken = crypto.randomUUID();
+        reconnectTokens.set(rcToken, { playerId, roomId, timer: null });
 
         sendTo(ws, {
           type: 'joined', playerId, colorIdx, seed: room.seed,
           config: configForClient(room.config), players: snapshot(room),
           isHost: playerId === room.hostId, opensInMs: LOBBY_OPEN_MS,
-          // Remaining solo auto-close window (ms), so the host can show a countdown.
-          // Calculated from room.createdAt so even a slightly-late join gets the
-          // right remaining time. Zero once the timer is cleared (2+ players).
           soloAutocloseMs: room.soloAutocloseTimer
             ? Math.max(0, room.createdAt + SOLO_AUTOCLOSE_MS - Date.now())
             : 0,
+          reconnectToken: rcToken,
         });
         broadcast(roomId, { type: 'player-joined', name, players: snapshot(room) });
         console.log(`[room:${roomId}] ${name} joined (${room.players.size} players)`);
@@ -1436,6 +1442,54 @@ async function main() {
         broadcast(info.roomId, { type: 'go', raceId: room.raceId, seed: room.seed, config: configForClient(room.config), players: snapshot(room) });
       }
 
+      // ── reconnect: client is resuming after a brief disconnect ─────────────
+      // The client sends { type:'reconnect', token, roomId }. If the token is
+      // still valid (grace period hasn't expired) we cancel the removal timer,
+      // re-associate the new WebSocket with the existing player slot, and send
+      // the client a 'reconnected' message with the current room state so it can
+      // restore its UI without a full rejoin.
+      if (msg.type === 'reconnect') {
+        const token  = String(msg.token  || '').slice(0, 64);
+        const roomId = String(msg.roomId || '').slice(0, 32);
+        const entry  = reconnectTokens.get(token);
+        if (!entry || entry.roomId !== roomId) {
+          sendTo(ws, { type: 'error', msg: 'Invalid or expired reconnect token' });
+          return;
+        }
+        const room = rooms.get(roomId);
+        if (!room) {
+          reconnectTokens.delete(token);
+          sendTo(ws, { type: 'error', msg: 'Room no longer exists' });
+          return;
+        }
+        const player = room.players.get(entry.playerId);
+        if (!player) {
+          reconnectTokens.delete(token);
+          sendTo(ws, { type: 'error', msg: 'Player slot no longer available' });
+          return;
+        }
+        // Cancel the grace-period removal timer.
+        if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+        // Re-associate the fresh socket with the existing player.
+        player.disconnected = false;
+        clients.set(ws, { playerId: entry.playerId, roomId, name: player.name });
+        broadcast(roomId, { type: 'player-reconnected', playerId: entry.playerId, players: snapshot(room) });
+        sendTo(ws, {
+          type:           'reconnected',
+          playerId:       entry.playerId,
+          colorIdx:       player.colorIdx,
+          seed:           room.seed,
+          config:         configForClient(room.config),
+          players:        snapshot(room),
+          isHost:         entry.playerId === room.hostId,
+          raceInProgress: room.started && !room.finished,
+          raceId:         room.raceId || null,
+          reconnectToken: token, // reuse the same token
+        });
+        console.log(`[room:${roomId}] ${player.name} reconnected`);
+        return;
+      }
+
       // ── watch: stream a recorded race back to this socket ───────────────────
       // A spectator socket — it never joins a room. Loads the race from Valkey
       // (primary) and streams replay:true frames. If only the Kafka fallback has
@@ -1464,40 +1518,93 @@ async function main() {
       if (info) {
         const room = rooms.get(info.roomId);
         if (room) {
-          // Release the player's colour and lane back into the pool so a later
-          // joiner can reuse them without a duplicate appearing in the room.
-          const leaving = room.players.get(info.playerId);
-          if (leaving) {
-            room.usedColors.delete(leaving.colorIdx);
-            room.usedLanes.delete(leaving.lane);
+          // Find the reconnect token for this player (if any).
+          let rcToken = null;
+          for (const [t, v] of reconnectTokens) {
+            if (v.playerId === info.playerId && v.roomId === info.roomId) { rcToken = t; break; }
           }
-          room.players.delete(info.playerId);
-          // If the host bailed, promote the next remaining player so an open
-          // lobby always has someone who can start it.
-          if (info.playerId === room.hostId) {
-            const next = room.players.keys().next();
-            room.hostId = next.done ? null : next.value;
-            if (room.hostId && !room.started) {
-              broadcast(info.roomId, { type: 'host-changed', hostId: room.hostId });
+
+          if (rcToken) {
+            // Grace period: keep the player slot alive, give the client 15 s to reconnect.
+            const player = room.players.get(info.playerId);
+            if (player) player.disconnected = true;
+            // Broadcast to others so they know this player is temporarily away.
+            broadcast(info.roomId, {
+              type:     'player-disconnected',
+              playerId: info.playerId,
+              players:  snapshot(room),
+            });
+            // Schedule the full removal once the grace period expires.
+            const entry = reconnectTokens.get(rcToken);
+            entry.timer = setTimeout(() => {
+              reconnectTokens.delete(rcToken);
+              const r = rooms.get(info.roomId);
+              if (!r) return;
+              const p = r.players.get(info.playerId);
+              if (!p) return; // already cleaned up (should not happen in normal flow)
+              // Release colour/lane and remove the player.
+              r.usedColors.delete(p.colorIdx);
+              r.usedLanes.delete(p.lane);
+              r.players.delete(info.playerId);
+              // Host promotion if needed.
+              if (info.playerId === r.hostId) {
+                const next = r.players.keys().next();
+                r.hostId = next.done ? null : next.value;
+                if (r.hostId && !r.started) {
+                  broadcast(info.roomId, { type: 'host-changed', hostId: r.hostId });
+                }
+              }
+              broadcast(info.roomId, {
+                type:     'player-left',
+                playerId: info.playerId,
+                players:  snapshot(r),
+              });
+              // If the race is live, a timed-out disconnected player counts as
+              // gone — check whether the remaining field has all finished.
+              if (r.started && !r.finished && allFinished(r)) {
+                endRace(r, info.roomId);
+              }
+              if (r.players.size === 0) {
+                if (r.lockTimer)          clearTimeout(r.lockTimer);
+                if (r.dnfTimer)           clearTimeout(r.dnfTimer);
+                if (r.countdownInterval)  clearInterval(r.countdownInterval);
+                if (r.soloAutocloseTimer) clearTimeout(r.soloAutocloseTimer);
+                rooms.delete(info.roomId);
+                console.log(`[room:${info.roomId}] closed (empty)`);
+              }
+            }, GRACE_PERIOD_MS);
+            console.log(`[room:${info.roomId}] ${info.name} disconnected (grace period started)`);
+          } else {
+            // No reconnect token — immediate removal (spectators, already-expired tokens).
+            const leaving = room.players.get(info.playerId);
+            if (leaving) {
+              room.usedColors.delete(leaving.colorIdx);
+              room.usedLanes.delete(leaving.lane);
             }
-          }
-          broadcast(info.roomId, {
-            type:     'player-left',
-            playerId: info.playerId,
-            players:  snapshot(room),
-          });
-          // A leaver could be the last un-finished crab — if everyone still here
-          // has finished, close the race out instead of waiting on the DNF timer.
-          if (room.started && !room.finished && allFinished(room)) {
-            endRace(room, info.roomId);
-          }
-          if (room.players.size === 0) {
-            if (room.lockTimer)         clearTimeout(room.lockTimer);
-            if (room.dnfTimer)          clearTimeout(room.dnfTimer);
-            if (room.countdownInterval) clearInterval(room.countdownInterval);
-            if (room.soloAutocloseTimer) clearTimeout(room.soloAutocloseTimer);
-            rooms.delete(info.roomId);
-            console.log(`[room:${info.roomId}] closed (empty)`);
+            room.players.delete(info.playerId);
+            if (info.playerId === room.hostId) {
+              const next = room.players.keys().next();
+              room.hostId = next.done ? null : next.value;
+              if (room.hostId && !room.started) {
+                broadcast(info.roomId, { type: 'host-changed', hostId: room.hostId });
+              }
+            }
+            broadcast(info.roomId, {
+              type:     'player-left',
+              playerId: info.playerId,
+              players:  snapshot(room),
+            });
+            if (room.started && !room.finished && allFinished(room)) {
+              endRace(room, info.roomId);
+            }
+            if (room.players.size === 0) {
+              if (room.lockTimer)          clearTimeout(room.lockTimer);
+              if (room.dnfTimer)           clearTimeout(room.dnfTimer);
+              if (room.countdownInterval)  clearInterval(room.countdownInterval);
+              if (room.soloAutocloseTimer) clearTimeout(room.soloAutocloseTimer);
+              rooms.delete(info.roomId);
+              console.log(`[room:${info.roomId}] closed (empty)`);
+            }
           }
         }
         clients.delete(ws);

@@ -302,6 +302,17 @@ let currentRaceId = null;  // raceId of the race in progress (from 'go') — for
 let soloToken     = null;  // one-time token issued by GET /solo-token before each solo race
 let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
 
+// ─── reconnection state ────────────────────────────────────────────────────────
+// When the server issues a reconnect token at join time the client stores it so
+// it can resume a dropped connection without losing its slot in the room.
+let reconnectToken   = null; // token issued by 'joined'; null until first join
+let reconnectRoomId  = null; // the roomId we're trying to reconnect into
+let reconnectWsUrl   = null; // the WebSocket URL to reconnect to
+let reconnectAttempt = 0;    // how many reconnect attempts so far this episode
+let reconnectTimer   = null; // handle for the next scheduled retry
+const MAX_RECONNECT_ATTEMPTS = 7;   // 7 × 2 s ≈ 14 s — matches server grace period
+const RECONNECT_INTERVAL_MS  = 2000;
+
 const CRAB_PALETTES = [
   ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
   ['#a04030', '#c06050', '#903020', '#d09080'], // 1 red
@@ -822,6 +833,8 @@ function handleServerMsg(msg) {
       myColorIdx  = msg.colorIdx;
       isHost      = !!msg.isHost;
       lobbyLocked = false;
+      // Store the reconnect token so handleWsClose can resume the connection.
+      if (msg.reconnectToken) reconnectToken = msg.reconnectToken;
       // Apply the room's track config (lanes / zones / obstacle kinds) BEFORE
       // building obstacles so the client matches the server's authoritative track.
       if (msg.config) applyGameConfig(msg.config);
@@ -915,18 +928,58 @@ function handleServerMsg(msg) {
       }
       break;
     case 'solo-autoclose-cancelled':
-      // Server confirmed a second player joined — stop showing the auto-close notice.
       cancelSoloAutocloseCountdown();
       break;
     case 'room-closed':
-      // Server auto-closed the room (nobody joined in time). Show the reason and
-      // clean up: close the socket and return to the fresh lobby.
       cancelSoloAutocloseCountdown();
       setStatus(`Room closed: ${msg.reason || 'Lobby expired.'}`);
       if (ws) { try { ws.close(); } catch {} ws = null; }
       myPlayerId = null;
       isHost     = false;
       break;
+    case 'player-disconnected':
+      if (!gameScene && msg.players) {
+        setPlayerList(msg.players);
+        updateStartButton(msg.players.length);
+      }
+      break;
+    case 'player-reconnected':
+      if (!gameScene && msg.players) {
+        setPlayerList(msg.players);
+        updateStartButton(msg.players.length);
+      }
+      break;
+    case 'reconnected': {
+      // Our own reconnect was accepted.  Cancel any pending retry timer.
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      reconnectAttempt = 0;
+      // Keep the same token for the next potential disconnect.
+      if (msg.reconnectToken) reconnectToken = msg.reconnectToken;
+      myPlayerId  = msg.playerId;
+      myColorIdx  = msg.colorIdx;
+      isHost      = !!msg.isHost;
+      if (msg.config) applyGameConfig(msg.config);
+      if (msg.seed != null) buildObstacles(msg.seed);
+      if (msg.raceInProgress && gameScene) {
+        // The race is still going — push the current player positions so the
+        // local simulation re-syncs after the gap.
+        gameScene.applyServerState(msg.players, null, null);
+        if (gameScene.statusText) gameScene.statusText.setText('');
+        setStatus('Reconnected');
+      } else if (!msg.raceInProgress) {
+        // Back in the lobby (race ended while we were away, or never started).
+        setPlayerList(msg.players);
+        updateStartButton(msg.players.length);
+        setStatus(isHost
+          ? 'Reconnected — click Start Match to race'
+          : 'Reconnected — waiting for host…');
+      }
+      // If raceInProgress but gameScene is null the race started while we were
+      // disconnected; nothing to render yet — the server will send 'go' again
+      // if the room resets, and the next 'room-reset' will sync the lobby.
+      break;
+    }
+>>>>>>> 6f1002b (feat: reconnect after brief WebSocket disconnect (closes #33))
     case 'error':
       setStatus(`⚠ ${msg.msg}`);
       break;
@@ -1047,19 +1100,91 @@ async function startSolo() {
   startGame(false);
 }
 
+// ─── auto-reconnect ────────────────────────────────────────────────────────────
+// Called by ws.onclose for multiplayer sockets. If the player has a valid
+// reconnect token (i.e. they haven't intentionally gone home) we retry every
+// RECONNECT_INTERVAL_MS for up to MAX_RECONNECT_ATTEMPTS before giving up.
+function handleWsClose() {
+  // If reconnectToken is null the player either never joined or already called
+  // goHome() (which clears the token synchronously before ws.close()). Don't
+  // start a reconnect loop in either case.
+  if (!reconnectToken || !reconnectRoomId || !reconnectWsUrl) {
+    if (gameScene?.statusText) gameScene.statusText.setText('Disconnected');
+    return;
+  }
+  reconnectAttempt = 0;
+  tryReconnect();
+}
+
+function tryReconnect() {
+  if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+    const msg = 'Disconnected — could not reconnect';
+    if (gameScene?.statusText) gameScene.statusText.setText(msg);
+    setStatus(msg);
+    reconnectToken = null;
+    return;
+  }
+  reconnectAttempt++;
+  const label = `Reconnecting… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`;
+  if (gameScene?.statusText) gameScene.statusText.setText(label);
+  setStatus(label);
+
+  let newWs;
+  try { newWs = new WebSocket(reconnectWsUrl); }
+  catch {
+    reconnectTimer = setTimeout(tryReconnect, RECONNECT_INTERVAL_MS);
+    return;
+  }
+
+  newWs.onopen = () => {
+    newWs.send(JSON.stringify({
+      type: 'reconnect', token: reconnectToken, roomId: reconnectRoomId,
+    }));
+  };
+  newWs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'error') {
+      // Server rejected the reconnect (token expired, room gone, etc.).
+      // Clear the token so we stop retrying and show the terminal message.
+      reconnectToken = null;
+      newWs.onclose = () => {}; // silence the close handler — we're done
+      try { newWs.close(); } catch {}
+      const text = 'Disconnected — could not reconnect';
+      if (gameScene?.statusText) gameScene.statusText.setText(text);
+      setStatus(text);
+      return;
+    }
+    // Successful response — promote this socket to the main ws.
+    newWs.onclose = null; // detach the retry handler before rewiring
+    ws = newWs;
+    ws.onmessage = ev => handleServerMsg(JSON.parse(ev.data));
+    ws.onclose   = handleWsClose;
+    ws.onerror   = () => setStatus('Connection error');
+    handleServerMsg(msg);
+  };
+  newWs.onerror = () => {};
+  newWs.onclose = () => {
+    // This attempt failed — schedule the next retry.
+    reconnectTimer = setTimeout(tryReconnect, RECONNECT_INTERVAL_MS);
+  };
+}
+
 function joinMulti() {
   const wsUrl  = $id('ws-url').value.trim()     || defaultWsUrl();
   const name   = $id('player-name').value.trim() || 'Crab';
   const roomId = $id('room-code').value.trim()   || 'room1';
   const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
   const config = readLobbyConfig(); // room creator's track settings; ignored for existing rooms
+  // Save for auto-reconnect in handleWsClose.
+  reconnectWsUrl  = wsUrl;
+  reconnectRoomId = roomId;
   setStatus('Connecting…');
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
   ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed, config }));
   ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
   ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
-  ws.onclose   = ()  => { if (gameScene?.statusText) gameScene.statusText.setText('Disconnected'); };
+  ws.onclose   = handleWsClose;
 }
 
 // ─── room browser ─────────────────────────────────────────────────────────────
@@ -1236,6 +1361,13 @@ function backToLobby() {
 function goHome() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene = null;
+  // Cancel any in-flight reconnect attempt before closing the socket so the
+  // onclose handler doesn't start a new reconnect loop.
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectToken   = null;
+  reconnectRoomId  = null;
+  reconnectWsUrl   = null;
+  reconnectAttempt = 0;
   if (ws) { try { ws.close(); } catch {} ws = null; }
   myPlayerId   = null;
   myColorIdx   = loadColorPref(); // restore saved solo preference; server may have overridden it
