@@ -1607,6 +1607,7 @@ class RaceScene extends Phaser.Scene {
     this.crab  = this.playerCrabs.get(myP.id);
     this.cell  = myP.cell;
     this.lane  = myP.lane;
+    this.myMultiColorIdx = myP.colorIdx; // needed for walk animation in prediction
   }
 
   // ── move ──────────────────────────────────────────────────────────────────
@@ -1614,10 +1615,42 @@ class RaceScene extends Phaser.Scene {
     if (this.busy || this.won) return;
     if (replayMode) return; // spectating a recording — input does nothing
 
-    // MULTIPLAYER: send to server; applyServerState() handles the result
+    // MULTIPLAYER: send to server and apply optimistic prediction locally
     if (multiMode) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'move', dx, dlane }));
+      }
+      // Lock busy immediately to stop key-repeat from flooding the server.
+      // Cleared when applyServerState confirms our move, or by fallback timer.
+      this.busy = true;
+      this.time.delayedCall(250, () => { if (!this.won) this.busy = false; });
+
+      // Optimistic prediction: move the sprite immediately so input feels
+      // instant. Only predict when not stunned and the move is locally valid
+      // (in-bounds and not a block obstacle). Push / stun effects will be
+      // corrected by applyServerState when the authoritative state arrives.
+      if (this.stunTurns <= 0) {
+        const nc = this.cell + dx;
+        const nl = this.lane + dlane;
+        if (nc >= 0 && nc < TOTAL_CELLS && nl >= 0 && nl < LANES) {
+          const obs = OBS_MAP.get(`${nc},${nl}`);
+          if (!obs || obs.effect !== 'block') {
+            const spr = this.crab;
+            const lbl = this.playerLabels?.get(myPlayerId);
+            const tx  = nc * CELLR + CELLR / 2;
+            const ty  = this.trackTop + nl * CELLR + CELLR / 2;
+            this.tweens.killTweensOf(spr);
+            if (dx !== 0) spr.play('walk_' + (this.myMultiColorIdx | 0), true);
+            this.tweens.add({
+              targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
+              onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
+              onComplete: () => {
+                lbl?.setPosition(tx, ty - 10 * RES);
+                spr.stop?.(); spr.setFrame?.(0);
+              },
+            });
+          }
+        }
       }
       return;
     }
@@ -1766,6 +1799,9 @@ class RaceScene extends Phaser.Scene {
         this.lane      = p.lane;
         this.stunTurns = p.stunTurns;
         this.refreshHUD();
+        // Server confirmed our move — unlock busy immediately rather than
+        // waiting for the 250ms fallback timer, so the next input can fire.
+        if (movedId === myPlayerId) this.busy = false;
       }
     }
 
