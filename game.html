@@ -809,7 +809,18 @@ function handleServerMsg(msg) {
       if (gameScene) gameScene.onRaceOver(msg.results);
       break;
     case 'player-left':
-      if (gameScene) gameScene.onPlayerLeft(msg.playerId);
+      if (gameScene) {
+        gameScene.onPlayerLeft(msg.playerId);
+      } else {
+        // Still in the lobby — update the player list and start button so the
+        // host can't click Start when the departing player was the last one
+        // needed to reach the 2-player minimum (which would make the server
+        // reject the attempt with "Need at least 2 players to start").
+        if (msg.players) {
+          setPlayerList(msg.players);
+          updateStartButton(msg.players.length);
+        }
+      }
       break;
     case 'error':
       setStatus(`⚠ ${msg.msg}`);
