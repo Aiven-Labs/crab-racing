@@ -217,7 +217,22 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"
+        integrity="sha512-YQL0GVx/Too3vZjBl9plePRIYsRnd1s8N6QOvXPdZ+JMH2mtRTLQXGUDGjNW6zr1HUgcOIury67IvWe91oeEwQ=="
+        crossorigin="anonymous"></script>
+<script>
+if (typeof Phaser === 'undefined') {
+  var msg = document.createElement('div');
+  msg.style.cssText = [
+    'position:fixed','top:0','left:0','width:100%','padding:16px 20px',
+    'background:#7a1010','color:#fff','font-family:monospace','font-size:14px',
+    'z-index:9999','text-align:center','box-sizing:border-box'
+  ].join(';');
+  msg.textContent = 'Phaser failed to load — the game cannot start. ' +
+    'Check your internet connection, disable any content blockers, and reload the page.';
+  document.body.appendChild(msg);
+}
+</script>
 <script>
 'use strict';
 
