@@ -36,7 +36,35 @@ function sendJson(res, code, body) {
   res.end(JSON.stringify(body));
 }
 
-/** POST /leaderboard body: { name, timeCs } → records score, returns board. */
+/** GET /solo-token → mints a one-time race token for solo score submission.
+ *  The token is stored in Valkey with a 10-minute TTL. The client must include
+ *  it in the POST /leaderboard body. This ties a score submission to a real
+ *  race session that the server approved — without it, anyone could POST times
+ *  without having played.
+ *  Fails open (returns token:null) when Valkey is unavailable so a Valkey
+ *  outage never blocks solo play. postLeaderboard skips validation when the
+ *  token is null, matching the existing degrade-don't-crash pattern. */
+async function getSoloToken(req, res) {
+  if (valkey?.status !== 'ready') {
+    // Valkey down — signal the client to send token:null; postLeaderboard
+    // will skip validation in that case so scores still record.
+    return sendJson(res, 200, { token: null });
+  }
+  const token = crypto.randomUUID();
+  try {
+    await valkey.set(`solo:token:${token}`, '1', 'EX', 10 * 60); // 10-minute TTL
+    sendJson(res, 200, { token });
+  } catch (err) {
+    console.error('[valkey] getSoloToken error:', err.message);
+    sendJson(res, 200, { token: null }); // degrade rather than block the player
+  }
+}
+
+/** POST /leaderboard body: { name, timeCs, token } → validates solo race token,
+ *  records score, returns board. The token field is required for solo races and
+ *  must be a value minted by GET /solo-token for this session (single-use).
+ *  Multiplayer scores are recorded server-side via the Kafka consumer; this
+ *  endpoint is solo-only. */
 function postLeaderboard(req, res) {
   let raw = '';
   req.on('data', chunk => {
@@ -54,6 +82,29 @@ function postLeaderboard(req, res) {
 
     let body;
     try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+
+    // Validate and consume the solo race token. The token must have been issued
+    // by GET /solo-token for this session — it is single-use and expires after
+    // 10 minutes. When Valkey is ready a missing or already-consumed token is
+    // rejected outright. When Valkey is unavailable we fail open (degrade-don't-
+    // crash) so a Valkey blip never blocks a solo player's finish from recording.
+    const token = body.token != null ? String(body.token).slice(0, 64) : null;
+    if (valkey?.status === 'ready') {
+      if (!token) {
+        return sendJson(res, 403, { error: 'solo token required' });
+      }
+      try {
+        const deleted = await valkey.del(`solo:token:${token}`);
+        if (deleted !== 1) {
+          return sendJson(res, 403, { error: 'invalid or already used token' });
+        }
+      } catch (err) {
+        console.error('[valkey] token validation error:', err.message);
+        // Fail open on Valkey error — a blip must not block a solo finish.
+      }
+    }
+    // If Valkey is not ready, skip token validation (fail open — degraded mode).
+
     const name     = String(body.name || 'Crab').slice(0, 20);
     const timeCs   = Number(body.timeCs);
     // Reject implausible times up front so a bad client gets a clear error
@@ -88,7 +139,15 @@ function serveStatic(req, res) {
     return;
   }
 
-  // Leaderboard API — GET reads the board, POST records a finish.
+  // Solo race token — issued before a solo race begins; must be included in
+  // POST /leaderboard to prove the submission belongs to a real race session.
+  if (route === '/solo-token') {
+    if (req.method === 'GET') { getSoloToken(req, res); return; }
+    res.writeHead(405); res.end('405 Method Not Allowed'); return;
+  }
+
+  // Leaderboard API — GET reads the board, POST records a finish (solo only;
+  // multiplayer finishes are recorded server-side via the Kafka consumer).
   // The board is per-seed: GET requires ?seed= and returns only scores from
   // that obstacle layout. Omitting seed returns 400 — mixing seeds would make
   // times meaningless (different tracks = different difficulty).

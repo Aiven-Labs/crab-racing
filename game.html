@@ -262,6 +262,7 @@ let isHost       = false; // true when this client created the lobby (may start 
 let lobbyLocked  = false; // true once the lobby stops accepting new joiners
 let replayMode   = false; // true while watching a recorded race (spectator, no input)
 let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
+let soloToken     = null;  // one-time token issued by GET /solo-token before each solo race
 let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
 
 const CRAB_PALETTES = [
@@ -954,21 +955,18 @@ function escapeHtml(s) {
     ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-// Record a finish on the server. The persistent global board is no longer shown
-// on the home page (finish times aren't comparable across different seeds/track
-// settings — the fair ranking is the per-race results screen). We still POST so
-// the server keeps its records (incl. the seed + raceId for replay); the result
-// is intentionally not rendered anywhere.
-// playerId makes the server-side sorted-set member unique so two players
-// named "Crab" (the default) don't collide on a single slot. Pass myPlayerId
-// for multiplayer; omit (or pass '') for solo — the server generates a random
-// suffix in that case so every solo entry is still distinct.
-async function submitScore(name, timeCs, colorIdx, seed, raceId, playerId = '') {
+// Record a solo finish on the server. Multiplayer finishes are recorded
+// server-side via the Kafka consumer — this endpoint is solo-only.
+// `token` is the one-time value issued by GET /solo-token before the race;
+// the server validates and consumes it to confirm this submission came from
+// a real race session (not a bare HTTP POST). null is sent when Valkey was
+// unavailable at race-start so the server can fail open in degraded mode.
+async function submitScore(name, timeCs, colorIdx, seed, raceId, token) {
   try {
     await fetch(`${leaderboardBase()}/leaderboard`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId, playerId }),
+      body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId, token }),
     });
   } catch { /* offline — score just isn't recorded */ }
 }
@@ -979,9 +977,18 @@ function readSeedInput() {
   return raw || String(Math.floor(Math.random() * 0xffffffff));
 }
 
-function startSolo() {
+async function startSolo() {
   applyLobbyConfig(readLobbyConfig());   // custom lanes / length / obstacles
   buildObstacles(readSeedInput());
+  // Fetch a one-time race token from the server before starting. The token is
+  // included in the POST /leaderboard body to prove the submission came from
+  // a real race session. Fails open (token stays null) when the server is
+  // unreachable so a network blip never prevents a solo race from starting.
+  soloToken = null;
+  try {
+    const resp = await fetch(`${leaderboardBase()}/solo-token`);
+    if (resp.ok) { const data = await resp.json(); soloToken = data.token ?? null; }
+  } catch { /* server unreachable — token stays null; server will fail open */ }
   $id('lobby').classList.add('hidden');
   startGame(false);
 }
@@ -1084,6 +1091,7 @@ function goHome() {
   lobbyLocked  = false;
   replayMode   = false;
   currentRaceId = null;
+  soloToken     = null;           // discard any unused solo race token
   pendingSoloReplay = null;
   // Drop any ?replay= / #replay= from the address bar so a refresh doesn't
   // re-launch the replay.
@@ -1910,7 +1918,10 @@ class RaceScene extends Phaser.Scene {
       const rec = buildSoloRecord(this.soloMoves || [], this.raceTime, playerName, myColorIdx);
       const isNewBest = saveBestGhost(seedStr, rec);
       if (isNewBest) { vsLine = ghostCs != null ? vsLine : '🏆 new best — race again to chase it!'; vsColor = '#90d090'; }
-      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', myPlayerId || '');
+      // Submit with the one-time token issued at race-start; clear it immediately
+      // so a second call (e.g. from a scene restart) can't reuse the same token.
+      const token = soloToken; soloToken = null;
+      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token);
       panelH = 112 + (vsLine ? 16 : 0); // room for the Share button (+ vs line)
     }
 
@@ -1975,6 +1986,8 @@ class RaceScene extends Phaser.Scene {
   // ── onFinish (multiplayer, my crab) ─────────────────────────────────────────
   // My crab crossed the line. The race continues for everyone still going, so we
   // just lock my controls and show my place — the final screen waits for race-over.
+  // Score recording is handled server-side via the Kafka consumer (recordScore is
+  // called in the finish handler there); no client POST needed for multiplayer.
   onFinish(place, finishTimeCs) {
     if (this.won) return;
     this.won = true;
@@ -1982,12 +1995,6 @@ class RaceScene extends Phaser.Scene {
     this.crab?.setFrame?.(0);
     if (this.timerEvent) this.timerEvent.remove();
     if (Number.isFinite(finishTimeCs)) this.timerText.setText(fmtTime(finishTimeCs));
-
-    // Record my finish on the server (server-authoritative time). Not displayed
-    // on the home page anymore; kept for the server's records incl. replay.
-    const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
-    const timeCs = Number.isFinite(finishTimeCs) ? finishTimeCs : this.raceTime;
-    submitScore(playerName, timeCs, myColorIdx, raceSeed != null ? String(raceSeed) : '', currentRaceId || '', myPlayerId || '');
 
     this.statusText.setColor('#e8e030');
     this.statusText.setText(`🦀 FINISHED ${ordinal(place)} — waiting for the rest…`);
