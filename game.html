@@ -2018,11 +2018,7 @@ class RaceScene extends Phaser.Scene {
       return;
     }
 
-    // Clear busy immediately so the next keypress isn't blocked for the full
-    // tween duration — matches the multiplayer prediction approach.
-    this.cell = nextCell;
-    this.lane = nextLane;
-    this.busy = false;
+    this.busy = true;
     if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
 
     this.tweens.killTweensOf(this.crab);
@@ -2030,8 +2026,11 @@ class RaceScene extends Phaser.Scene {
       targets:  this.crab,
       x:        nextCell * CELLR + CELLR/2,
       y:        this.trackTop + nextLane * CELLR + CELLR/2,
-      duration: 100, ease: 'Linear',
+      duration: 80, ease: 'Linear',
       onComplete: () => {
+        this.cell = nextCell;
+        this.lane = nextLane;
+        this.busy = false;
 
         if (obs) {
           if (obs.effect === 'stun') {
