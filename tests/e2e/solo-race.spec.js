@@ -8,7 +8,7 @@ test('solo race: menu launches, race can be won, score is submitted', async ({ p
   const pageErrors = [];
   page.on('pageerror', err => pageErrors.push(err));
 
-  await page.goto('/');
+  await page.goto('/game.html');
   await pointAtServer(page);
   await useShortTrack(page);
 
