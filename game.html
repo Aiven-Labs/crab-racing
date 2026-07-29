@@ -227,6 +227,20 @@
     display: flex; align-items: center; gap: 10px;
     font-size: 15px; padding: 6px 10px; border-left: 3px solid transparent;
   }
+
+  /* ── Solo stats table ─────────────────────────────────── */
+  .r-stats {
+    margin: 10px 0 6px;
+    border: 1px solid #1e3050; border-radius: 2px;
+    font-size: 13px;
+  }
+  .r-stats-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 10px; border-bottom: 1px solid #1a2a40;
+  }
+  .r-stats-row:last-child { border-bottom: none; }
+  .r-stats-row .rs-label { color: #7ec8e3; }
+  .r-stats-row .rs-val   { color: #e0e8f8; font-weight: bold; }
   .r-row.me       { background: #16283c; }
   .r-row .r-rank  { flex: 0 0 38px; font-weight: bold; color: #a0c8e8; }
   .r-row .r-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1742,14 +1756,15 @@ class RaceScene extends Phaser.Scene {
     const worldH   = Math.max(H, trackTop + trackH);
     this.worldH       = worldH;
     this.trackTop     = trackTop;
-    this.busy         = false;
-    this.won          = false; // my crab has crossed the finish line
-    this.raceOver     = false; // the whole race has ended (results are in)
-    this.stunTurns    = 0;
-    this.raceTime     = 0;
-    this.timerStarted = false;
-    this.timerEvent   = null;
-    this.dnfEvent     = null;  // ticks down the on-screen DNF countdown
+    this.busy           = false;
+    this.won            = false; // my crab has crossed the finish line
+    this.raceOver       = false; // the whole race has ended (results are in)
+    this.stunTurns      = 0;
+    this.raceTime       = 0;
+    this.timerStarted   = false;
+    this.timerEvent     = null;
+    this.dnfEvent       = null;  // ticks down the on-screen DNF countdown
+    this.obstacleCounts = {};    // { 'hole': 2, 'rock': 1, … } — incremented in _soloStep
 
     // ── terrain ────────────────────────────────────────────────
     for (let cx = 0; cx < TOTAL_CELLS; cx++)
@@ -2100,6 +2115,7 @@ class RaceScene extends Phaser.Scene {
 
     const obs = OBS_MAP.get(`${nextCell},${nextLane}`);
     if (obs?.effect === 'block') {
+      this.obstacleCounts[obs.type] = (this.obstacleCounts[obs.type] || 0) + 1;
       this.cameras.main.shake(100, 0.008);
       this.statusText.setText(obs.msg);
       this.time.delayedCall(800, () => this.statusText.setText(''));
@@ -2122,6 +2138,7 @@ class RaceScene extends Phaser.Scene {
       duration: 80, ease: 'Linear',
       onComplete: () => {
         if (obs) {
+          this.obstacleCounts[obs.type] = (this.obstacleCounts[obs.type] || 0) + 1;
           if (obs.effect === 'stun') {
             this.statusText.setText(obs.msg);
             this.cameras.main.flash(200, 255, 80, 0);
@@ -2301,10 +2318,10 @@ class RaceScene extends Phaser.Scene {
     // Ghost outcome: compare this run against the PB we raced (its recorded
     // finish time), then persist this run as the new best if it's faster. Compare
     // BEFORE saving so we measure against the run the ghost actually was.
-    let vsLine = null, vsClass = 'even';
+    let vsLine = null, vsClass = 'even', ghostCs = null;
     if (!watching) {
       const seedStr = raceSeed != null ? String(raceSeed) : '';
-      const ghostCs = this.ghost?.record?.finishTimeCs;
+      ghostCs = this.ghost?.record?.finishTimeCs ?? null;
       if (Number.isFinite(ghostCs)) {
         const delta = this.raceTime - ghostCs; // <0 → faster than PB
         if (delta < 0) { vsLine = `👻 beat your best by ${fmtTime(-delta)}!`; vsClass = 'good'; }
@@ -2320,9 +2337,23 @@ class RaceScene extends Phaser.Scene {
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token);
     }
 
+    const OB_LABELS = { hole: '🕳️ Sand Hole', jelly: '🪼 Jellyfish', rock: '🪨 Rock',
+                        beach: '🏖️ Beach Tourist', net: '🥅 Fishing Net' };
+    const hitTypes = OBSTACLE_KINDS.map(k => k.type).filter(t => this.obstacleCounts[t] > 0);
+
     let html = `<h2>${watching ? '🦀 REPLAY 🦀' : '🦀 FINISH! 🦀'}</h2>`;
     html += `<div class="r-time">Time: ${fmtTime(shownCs)}</div>`;
     if (vsLine) html += `<div class="r-vs ${vsClass}">${vsLine}</div>`;
+
+    if (!watching && (Number.isFinite(ghostCs) || hitTypes.length > 0)) {
+      html += `<div class="r-stats">`;
+      if (Number.isFinite(ghostCs))
+        html += `<div class="r-stats-row"><span class="rs-label">Previous best</span><span class="rs-val">${fmtTime(ghostCs)}</span></div>`;
+      for (const t of hitTypes)
+        html += `<div class="r-stats-row"><span class="rs-label">${OB_LABELS[t] || t}</span><span class="rs-val">${this.obstacleCounts[t]}×</span></div>`;
+      html += `</div>`;
+    }
+
     html += `<div class="r-actions">${watching ? '' : `<button id="r-share">📋 Share replay</button>`}</div>`;
     html += `<div class="r-hint">${watching ? 'tap 🏠 Home' : 'tap anywhere or press space to race again · 🏠 Home'}</div>`;
     showResultPanel(html);
