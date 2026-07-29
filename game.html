@@ -1832,7 +1832,8 @@ class RaceScene extends Phaser.Scene {
     const worldH   = Math.max(H, trackTop + trackH);
     this.worldH       = worldH;
     this.trackTop     = trackTop;
-    this.busy           = false;
+    this.busy              = false;
+    this.inputBlockedUntil = 0;   // timestamp (ms) — solo input ignored until this
     this.won            = false; // my crab has crossed the finish line
     this.raceOver       = false; // the whole race has ended (results are in)
     this.stunTurns      = 0;
@@ -2044,6 +2045,17 @@ class RaceScene extends Phaser.Scene {
     if (obs?.effect === 'stun') g.stun = obs.turns;
     if (g.cell >= FINISH_CELL) g.won = true;
 
+    // Snap ghost to finish immediately so its visual position matches its logical
+    // finish time — no tween lag to make a faster ghost appear still behind you.
+    if (g.won) {
+      this.tweens.killTweensOf(g.spr);
+      g.spr.setX(nc * CELLR + CELLR/2);
+      g.spr.setY(g.trackTop + nl * CELLR + CELLR/2);
+      g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES);
+      g.spr.stop?.(); g.spr.setFrame(0);
+      return;
+    }
+
     if (dx !== 0) g.spr.play('walk_' + (g.record.players?.[0]?.colorIdx || 0), true);
     this.tweens.killTweensOf(g.spr);
     this.tweens.add({
@@ -2163,6 +2175,7 @@ class RaceScene extends Phaser.Scene {
 
     // SOLO: local authoritative logic
     if (!this.timerStarted) this._startTimer();
+    if (Date.now() < this.inputBlockedUntil) return;
 
     // Record every input the solo logic processes (past the busy/won guard), so
     // the race can be re-simulated for a portable replay. Stun-consumes, blocks
@@ -2204,10 +2217,23 @@ class RaceScene extends Phaser.Scene {
       return;
     }
 
-    this.cell  = nextCell;
+    // For push obstacles, immediately set the authoritative cell to the pushed
+    // destination so rapid inputs can't "skip" the pushback by reading stale cell.
+    const isPush = obs?.effect === 'push';
+    const pushCell = isPush ? Math.max(0, nextCell - (obs.dist ?? 1)) : null;
+
+    this.cell  = isPush ? pushCell : nextCell;
     this.lane  = nextLane;
     this.busy  = false;
-    if (obs && obs.effect === 'stun') this.stunTurns = obs.turns;
+    if (obs && obs.effect === 'stun') {
+      this.stunTurns = obs.turns;
+      // Brief lock prevents rapid taps from burning through stun turns instantly.
+      this.inputBlockedUntil = Date.now() + 150;
+    }
+    if (isPush) {
+      // Block input for the full push animation (80ms move + 200ms delay + 120ms push).
+      this.inputBlockedUntil = Date.now() + 450;
+    }
 
     if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
     this.refreshHUD();
@@ -2224,15 +2250,13 @@ class RaceScene extends Phaser.Scene {
           if (obs.effect === 'stun') {
             this.statusText.setText(obs.msg);
             this.cameras.main.flash(200, 255, 80, 0);
-          } else if (obs.effect === 'push') {
+          } else if (isPush) {
             this.statusText.setText(obs.msg);
             this.cameras.main.shake(150, 0.01);
             this.time.delayedCall(200, () => {
-              if (this.cell !== nextCell) return;
-              const pushCell = Math.max(0, nextCell - (obs.dist ?? 1));
               this.tweens.add({
                 targets: this.crab, x: pushCell * CELLR + CELLR/2, duration: 120,
-                ease: 'Linear', onComplete: () => { this.cell = pushCell; this.refreshHUD(); }
+                ease: 'Linear', onComplete: () => this.refreshHUD(),
               });
             });
             this.time.delayedCall(900, () => this.statusText.setText(''));
