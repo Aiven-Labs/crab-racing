@@ -880,7 +880,7 @@ function applyMove(room, playerId, dx, dlane) {
     p.stunTurns = obs.turns;
     effect = { type: 'stun', msg: obs.msg, turns: obs.turns };
   } else if (obs?.effect === 'push') {
-    p.cell = Math.max(0, p.cell - 1);
+    p.cell = Math.max(0, p.cell - (obs.dist ?? 1));
     effect = { type: 'push', msg: obs.msg };
   }
 
