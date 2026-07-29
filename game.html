@@ -239,7 +239,12 @@
     padding: 4px 10px; border-bottom: 1px solid #1a2a40;
   }
   .r-stats-row:last-child { border-bottom: none; }
-  .r-stats-row .rs-label { color: #7ec8e3; }
+  .r-stats-row .rs-label {
+    display: flex; align-items: center; gap: 7px; color: #7ec8e3;
+  }
+  .r-stats-row .rs-label img {
+    width: 20px; height: 20px; image-rendering: pixelated;
+  }
   .r-stats-row .rs-val   { color: #e0e8f8; font-weight: bold; }
   .r-row.me       { background: #16283c; }
   .r-row .r-rank  { flex: 0 0 38px; font-weight: bold; color: #a0c8e8; }
@@ -2337,8 +2342,15 @@ class RaceScene extends Phaser.Scene {
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token);
     }
 
-    const OB_LABELS = { hole: '🕳️ Sand Hole', jelly: '🪼 Jellyfish', rock: '🪨 Rock',
-                        beach: '🏖️ Beach Tourist', net: '🥅 Fishing Net' };
+    const OB_NAMES   = { hole: 'Sand Hole', jelly: 'Jellyfish', rock: 'Rock',
+                         beach: 'Beach Tourist', net: 'Fishing Net' };
+    const OB_DRAWERS = { rock: drawRock, hole: drawHole, jelly: drawJelly,
+                         beach: drawBeach, net: drawNet };
+    const obSprite = (type) => {
+      const { canvas, ctx } = makeCanvas(32, 32);
+      if (OB_DRAWERS[type]) OB_DRAWERS[type](ctx);
+      return canvas.toDataURL();
+    };
     const hitTypes = OBSTACLE_KINDS.map(k => k.type).filter(t => this.obstacleCounts[t] > 0);
 
     let html = `<h2>${watching ? '🦀 REPLAY 🦀' : '🦀 FINISH! 🦀'}</h2>`;
@@ -2350,7 +2362,7 @@ class RaceScene extends Phaser.Scene {
       if (Number.isFinite(ghostCs))
         html += `<div class="r-stats-row"><span class="rs-label">Previous best</span><span class="rs-val">${fmtTime(ghostCs)}</span></div>`;
       for (const t of hitTypes)
-        html += `<div class="r-stats-row"><span class="rs-label">${OB_LABELS[t] || t}</span><span class="rs-val">${this.obstacleCounts[t]}×</span></div>`;
+        html += `<div class="r-stats-row"><span class="rs-label"><img src="${obSprite(t)}" alt="${OB_NAMES[t] || t}">${OB_NAMES[t] || t}</span><span class="rs-val">${this.obstacleCounts[t]}×</span></div>`;
       html += `</div>`;
     }
 
