@@ -240,6 +240,11 @@
      so the player can always bail back to the lobby. -->
 <button id="btn-home" class="hidden" title="Back to lobby">🏠 Home</button>
 
+<!-- ── Result overlay: solo finish screen and multiplayer results ─── -->
+<div id="result-overlay" class="hidden">
+  <div id="result-panel"></div>
+</div>
+
 <!-- ── Lobby ─────────────────────────────────────────── -->
 <div id="lobby">
   <div id="lobby-inner">
@@ -526,11 +531,11 @@ function drawNet(ctx) {
 // the values below once it arrives. The literals here are the fallback used when
 // the page is opened straight off the filesystem (no server / no config file).
 let OBSTACLE_KINDS = [
-  { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
-  { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+  { type: 'hole',  effect: 'stun',  turns: 4, msg: 'FELL IN A HOLE!'     },
+  { type: 'jelly', effect: 'stun',  turns: 2, msg: 'STUNG!'              },
   { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
   { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
-  { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
+  { type: 'net',   effect: 'stun',  turns: 2, msg: 'TANGLED IN A NET!'   },
 ];
 
 // Obstacle placement tunables — overwritten by applyGameConfig() from the server.
@@ -866,6 +871,17 @@ function setStatus(t) { $id('lobby-status').textContent = t; }
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                   .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Solo finish screen and multiplayer results panel (DOM overlay drawn on top
+// of the Phaser canvas — see onWin/onRaceOver in RaceScene).
+function showResultPanel(html) {
+  $id('result-panel').innerHTML = html;
+  $id('result-overlay').classList.remove('hidden');
+}
+function hideResultPanel() {
+  $id('result-overlay').classList.add('hidden');
+  $id('result-panel').innerHTML = '';
 }
 function setPlayerList(players) {
   lastPlayerCount = players.length;

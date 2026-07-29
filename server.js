@@ -320,11 +320,11 @@ const DEFAULT_GAME_CONFIG = {
     { tile: 'finish',      len: 3  },
   ],
   obstacleKinds: [
-    { type: 'hole',  effect: 'stun',  turns: 2, msg: 'FELL IN A HOLE!'     },
-    { type: 'jelly', effect: 'stun',  turns: 1, msg: 'STUNG!'              },
+    { type: 'hole',  effect: 'stun',  turns: 4, msg: 'FELL IN A HOLE!'     },
+    { type: 'jelly', effect: 'stun',  turns: 2, msg: 'STUNG!'              },
     { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
     { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
-    { type: 'net',   effect: 'stun',  turns: 1, msg: 'TANGLED IN A NET!'   },
+    { type: 'net',   effect: 'stun',  turns: 2, msg: 'TANGLED IN A NET!'   },
   ],
 };
 
