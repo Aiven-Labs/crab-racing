@@ -223,6 +223,25 @@
   #result-rows {
     display: flex; flex-direction: column; gap: 5px; margin: 16px 0; text-align: left;
   }
+
+  /* ── Per-seed leaderboard ──────────────────────────────────── */
+  .r-lb { margin: 14px 0 4px; text-align: left; }
+  .r-lb-title {
+    font-size: 12px; letter-spacing: 1px; color: #7ec8e3;
+    text-transform: uppercase; margin-bottom: 6px; padding: 0 2px;
+  }
+  .r-lb-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; padding: 4px 8px; border-left: 3px solid transparent;
+  }
+  .r-lb-row.lb-me { background: #16283c; }
+  .r-lb-row .lb-rank  { flex: 0 0 28px; font-weight: bold; color: #a0c8e8; }
+  .r-lb-row .lb-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r-lb-row .lb-time  { flex: 0 0 auto; color: #c0d8f0; }
+  .r-lb-row.lb-1 { border-left-color: #e8d030; }
+  .r-lb-row.lb-2 { border-left-color: #b8c4d0; }
+  .r-lb-row.lb-3 { border-left-color: #c88040; }
+  .r-lb-empty { font-size: 12px; color: #506080; padding: 4px 8px; }
   .r-row {
     display: flex; align-items: center; gap: 10px;
     font-size: 15px; padding: 6px 10px; border-left: 3px solid transparent;
@@ -799,6 +818,11 @@ function loadColorPref() {
 }
 function saveColorPref(idx) { try { localStorage.setItem('crabColor', String(idx)); } catch {} }
 
+function loadNamePref() {
+  try { return localStorage.getItem('crabName') || ''; } catch { return ''; }
+}
+function saveNamePref(name) { try { localStorage.setItem('crabName', String(name)); } catch {} }
+
 const CRAB_COLOR_NAMES = ['Blue', 'Red', 'Green', 'Purple'];
 
 // Carousel to choose your crab colour: ‹ arrow · preview crab + name · › arrow.
@@ -870,6 +894,10 @@ refreshLobbyBaselines();
 // Restore the saved crab colour and build the picker.
 myColorIdx = loadColorPref();
 buildColorPicker();
+
+// Pre-fill player name from localStorage (blank → input keeps its default "Crab").
+const _savedName = loadNamePref();
+if (_savedName) $id('player-name').value = _savedName;
 
 // Apply lobby overrides to the local track (solo races). Clamps + scales exactly
 // like the server so a solo track matches what a multiplayer room would build.
@@ -1179,12 +1207,42 @@ function escapeHtml(s) {
 // unavailable at race-start so the server can fail open in degraded mode.
 async function submitScore(name, timeCs, colorIdx, seed, raceId, token) {
   try {
-    await fetch(`${leaderboardBase()}/leaderboard`, {
+    const res = await fetch(`${leaderboardBase()}/leaderboard`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ name, timeCs, colorIdx, seed, raceId, token }),
     });
+    if (res.ok) return await res.json();
   } catch { /* offline — score just isn't recorded */ }
+  return null;
+}
+
+async function fetchLeaderboard(seed) {
+  if (!seed) return null;
+  try {
+    const res = await fetch(`${leaderboardBase()}/leaderboard?seed=${encodeURIComponent(seed)}`);
+    if (res.ok) return await res.json();
+  } catch { /* offline */ }
+  return null;
+}
+
+function renderLeaderboard(board, currentPlayerName) {
+  if (!Array.isArray(board) || board.length === 0) return '';
+  const name = (currentPlayerName || '').toLowerCase();
+  let html = `<div class="r-lb"><div class="r-lb-title">Seed Leaderboard</div>`;
+  board.forEach((entry, i) => {
+    const rank = i + 1;
+    const hex  = PALETTE_HEX[entry.colorIdx] || PALETTE_HEX[0];
+    const isMe = name && entry.name.toLowerCase() === name;
+    const cls  = `r-lb-row${isMe ? ' lb-me' : ''}${rank <= 3 ? ` lb-${rank}` : ''}`;
+    html += `<div class="${cls}">` +
+      `<span class="lb-rank">${rank}</span>` +
+      `<span class="lb-name" style="color:${hex}">${escapeHtml(String(entry.name).slice(0, 16))}</span>` +
+      `<span class="lb-time">${fmtTime(entry.timeCs)}</span>` +
+    `</div>`;
+  });
+  html += `</div>`;
+  return html;
 }
 
 // Read the seed input: blank → random seed, otherwise the custom string.
@@ -1194,6 +1252,7 @@ function readSeedInput() {
 }
 
 async function startSolo() {
+  saveNamePref(($id('player-name').value.trim() || 'Crab'));
   applyLobbyConfig(readLobbyConfig());   // custom lanes / length / obstacles
   buildObstacles(readSeedInput());
   // Fetch a one-time race token from the server before starting. The token is
@@ -1281,6 +1340,7 @@ function tryReconnect() {
 function joinMulti() {
   const wsUrl  = $id('ws-url').value.trim()     || defaultWsUrl();
   const name   = $id('player-name').value.trim() || 'Crab';
+  saveNamePref(name);
   const roomId = $id('room-code').value.trim()   || 'room1';
   const seed   = $id('seed-code').value.trim()   || undefined; // blank → server picks
   const config = readLobbyConfig(); // room creator's track settings; ignored for existing rooms
@@ -2345,7 +2405,12 @@ class RaceScene extends Phaser.Scene {
       // Submit with the one-time token issued at race-start; clear it immediately
       // so a second call (e.g. from a scene restart) can't reuse the same token.
       const token = soloToken; soloToken = null;
-      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token);
+      // Fire-and-forget submit; leaderboard appended async below once panel is shown.
+      submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token)
+        .then(board => {
+          const lbEl = $id('r-lb');
+          if (lbEl) { const lb = renderLeaderboard(board, playerName); if (lb) lbEl.outerHTML = lb; else lbEl.remove(); }
+        });
     }
 
     const OB_NAMES   = { hole: 'Sand Hole', jelly: 'Jellyfish', rock: 'Rock',
@@ -2371,6 +2436,9 @@ class RaceScene extends Phaser.Scene {
         html += `<div class="r-stats-row"><span class="rs-label"><img src="${obSprite(t)}" alt="${OB_NAMES[t] || t}">${OB_NAMES[t] || t}</span><span class="rs-val">${this.obstacleCounts[t]}×</span></div>`;
       html += `</div>`;
     }
+
+    // Placeholder replaced async once submitScore resolves.
+    if (!watching) html += `<div id="r-lb"></div>`;
 
     html += `<div class="r-actions">${watching ? '' : `<button id="r-share">📋 Share replay</button>`}</div>`;
     html += `<div class="r-hint">${watching ? 'tap 🏠 Home' : 'tap anywhere or press space to race again · 🏠 Home'}</div>`;
@@ -2483,13 +2551,28 @@ class RaceScene extends Phaser.Scene {
       `</div>`;
     }
 
-    let html = `<h2>🏁 RESULTS 🏁</h2><div id="result-rows">${rowsHtml}</div><div class="r-actions">`;
+    const seedStr = raceSeed != null ? String(raceSeed) : '';
+    const myName  = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
+
+    let html = `<h2>🏁 RESULTS 🏁</h2><div id="result-rows">${rowsHtml}</div>`;
+    // Placeholder replaced async once leaderboard fetch resolves.
+    if (seedStr) html += `<div id="r-lb"></div>`;
+    html += `<div class="r-actions">`;
     if (canShare) html += `<button id="r-share">📋 Share replay</button>`;
     if (isHost)   html += `<button id="r-again" class="primary">🏁 Race Again</button>`;
     html += `<button id="r-lobby">🏠 Back to Lobby</button>`;
     html += `<button id="r-leave" class="danger">🚪 Leave Room</button>`;
     html += `</div>`;
     showResultPanel(html);
+
+    // Fetch and inject per-seed leaderboard asynchronously so it doesn't delay
+    // the results panel from appearing.
+    if (seedStr) {
+      fetchLeaderboard(seedStr).then(board => {
+        const lbEl = $id('r-lb');
+        if (lbEl) { const lb = renderLeaderboard(board, myName); if (lb) lbEl.outerHTML = lb; else lbEl.remove(); }
+      });
+    }
 
     // Share-replay button: copies a ?replay=<raceId> link to the clipboard so
     // anyone can watch this exact race.
