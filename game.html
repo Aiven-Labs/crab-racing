@@ -2440,11 +2440,19 @@ class RaceScene extends Phaser.Scene {
       // Submit with the one-time token issued at race-start; clear it immediately
       // so a second call (e.g. from a scene restart) can't reuse the same token.
       const token = soloToken; soloToken = null;
-      // Fire-and-forget submit; leaderboard appended async below once panel is shown.
+      // Fire-and-forget submit; leaderboard + personal-best updated async once panel is shown.
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token)
         .then(board => {
           const lbEl = $id('r-lb');
           if (lbEl) { const lb = renderLeaderboard(board, playerName); if (lb) lbEl.outerHTML = lb; else lbEl.remove(); }
+          // Update "Personal best" with server-authoritative value keyed to this player name.
+          const pbEl = $id('r-pb-val');
+          if (pbEl && Array.isArray(board)) {
+            const name = playerName.toLowerCase();
+            const myBest = board.filter(e => e.name.toLowerCase() === name)
+                                .reduce((best, e) => (e.timeCs < best ? e.timeCs : best), Infinity);
+            if (Number.isFinite(myBest)) pbEl.textContent = fmtTime(myBest);
+          }
         });
     }
 
@@ -2466,7 +2474,7 @@ class RaceScene extends Phaser.Scene {
     if (!watching && (Number.isFinite(ghostCs) || hitTypes.length > 0)) {
       html += `<div class="r-stats">`;
       if (Number.isFinite(ghostCs))
-        html += `<div class="r-stats-row"><span class="rs-label">Previous best</span><span class="rs-val">${fmtTime(ghostCs)}</span></div>`;
+        html += `<div class="r-stats-row"><span class="rs-label">Personal best</span><span class="rs-val" id="r-pb-val">${fmtTime(ghostCs)}</span></div>`;
       for (const t of hitTypes)
         html += `<div class="r-stats-row"><span class="rs-label"><img src="${obSprite(t)}" alt="${OB_NAMES[t] || t}">${OB_NAMES[t] || t}</span><span class="rs-val">${this.obstacleCounts[t]}×</span></div>`;
       html += `</div>`;
