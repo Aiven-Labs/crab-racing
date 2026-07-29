@@ -9,7 +9,12 @@
   body {
     background: #0a0f1e;
     display: flex; justify-content: center; align-items: center;
-    height: 100vh; overflow: hidden; touch-action: none;
+    width: 100vw; height: 100vh; overflow: hidden; touch-action: none;
+  }
+
+  #game-container {
+    position: fixed; inset: 0;
+    display: flex; justify-content: center; align-items: center;
   }
 
   /* ── Lobby overlay ─────────────────────────────────── */
@@ -235,6 +240,7 @@
 </style>
 </head>
 <body>
+<div id="game-container"></div>
 
 <!-- Persistent "home" button — shown only while a race or replay is on screen,
      so the player can always bail back to the lobby. -->
@@ -1417,6 +1423,7 @@ function startGame(isMulti) {
     height:          BASE_H * RES,
     backgroundColor: '#1a2030',
     pixelArt:        true,
+    parent:          'game-container',
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     scene: RaceScene,
   });
