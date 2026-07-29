@@ -534,7 +534,7 @@ let OBSTACLE_KINDS = [
   { type: 'hole',  effect: 'stun',  turns: 4, msg: 'FELL IN A HOLE!'     },
   { type: 'jelly', effect: 'stun',  turns: 2, msg: 'STUNG!'              },
   { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-  { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
+  { type: 'beach', effect: 'push',  dist: 3,   msg: 'TOURIST KICKED YOU!' },
   { type: 'net',   effect: 'stun',  turns: 2, msg: 'TANGLED IN A NET!'   },
 ];
 
@@ -1429,6 +1429,7 @@ function startGame(isMulti) {
 function backToLobby() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene         = null;
+  hideResultPanel();
   replayMode        = false;
   currentRaceId     = null;
   pendingSoloReplay = null;
@@ -1446,6 +1447,7 @@ function backToLobby() {
 function goHome() {
   if (window._phaserGame) { window._phaserGame.destroy(true); window._phaserGame = null; }
   gameScene = null;
+  hideResultPanel();
   // Cancel any in-flight reconnect attempt before closing the socket so the
   // onclose handler doesn't start a new reconnect loop.
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -1494,7 +1496,7 @@ function penaltyText(kind) {
   switch (kind.effect) {
     case 'stun':  return `Stunned — lose ${kind.turns} turn${kind.turns > 1 ? 's' : ''}`;
     case 'block': return 'Blocked — you can\'t enter this cell';
-    case 'push':  return 'Knocked back one cell';
+    case 'push':  return `Knocked back ${kind.dist ?? 1} cell${(kind.dist ?? 1) !== 1 ? 's' : ''}`;
     default:      return '';
   }
 }
@@ -1689,6 +1691,7 @@ class RaceScene extends Phaser.Scene {
   // No preload — all textures created synchronously in create()
   create() {
     gameScene = this;
+    hideResultPanel(); // clear any leftover finish/results panel from a prior race
 
     // ── tile textures ──────────────────────────────────────────
     const tileDrawers = { shore: drawShore, wetSand: drawWetSand, drySand: drawDrySand,
@@ -1947,7 +1950,7 @@ class RaceScene extends Phaser.Scene {
         g.cell = nc; g.lane = nl; g.busy = false;
         if (obs?.effect === 'stun') g.stun = obs.turns;
         else if (obs?.effect === 'push') {
-          const pushCell = Math.max(0, g.cell - 1);
+          const pushCell = Math.max(0, g.cell - (obs.dist ?? 1));
           this.tweens.add({ targets: g.spr, x: pushCell*CELLR + CELLR/2, duration: 120, ease: 'Linear',
             onUpdate: () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES),
             onComplete: () => { g.cell = pushCell; } });
@@ -2121,7 +2124,7 @@ class RaceScene extends Phaser.Scene {
             this.cameras.main.shake(150, 0.01);
             this.time.delayedCall(200, () => {
               if (this.cell !== nextCell) return;
-              const pushCell = Math.max(0, nextCell - 1);
+              const pushCell = Math.max(0, nextCell - (obs.dist ?? 1));
               this.tweens.add({
                 targets: this.crab, x: pushCell * CELLR + CELLR/2, duration: 120,
                 ease: 'Linear', onComplete: () => { this.cell = pushCell; this.refreshHUD(); }
@@ -2277,7 +2280,6 @@ class RaceScene extends Phaser.Scene {
     this.crab?.setFrame?.(0);
     if (this.timerEvent) this.timerEvent.remove();
 
-    const { width: W, height: H } = this.scale;
     const watching = replayMode; // replaying a recorded solo race, not a live run
 
     // Show the finish time. For a replay, use the recorded authoritative time so
@@ -2287,86 +2289,59 @@ class RaceScene extends Phaser.Scene {
     if (this.timerText) this.timerText.setText(fmtTime(shownCs));
     if (this.statusText) this.statusText.setText('');
 
-    // A live solo finish is recordable/shareable; a replay is not.
-    let panelH = 92;
     const playerName = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
+    const soloMoves  = this.soloMoves || [];
 
     // Ghost outcome: compare this run against the PB we raced (its recorded
     // finish time), then persist this run as the new best if it's faster. Compare
     // BEFORE saving so we measure against the run the ghost actually was.
-    let vsLine = null, vsColor = '#7ec8e3';
+    let vsLine = null, vsClass = 'even';
     if (!watching) {
       const seedStr = raceSeed != null ? String(raceSeed) : '';
       const ghostCs = this.ghost?.record?.finishTimeCs;
       if (Number.isFinite(ghostCs)) {
         const delta = this.raceTime - ghostCs; // <0 → faster than PB
-        if (delta < 0) { vsLine = `👻 beat your best by ${fmtTime(-delta)}!`; vsColor = '#90d090'; }
-        else if (delta > 0) { vsLine = `👻 best was faster by ${fmtTime(delta)}`; vsColor = '#e0a060'; }
-        else { vsLine = '👻 dead heat with your best!'; vsColor = '#e8e030'; }
+        if (delta < 0) { vsLine = `👻 beat your best by ${fmtTime(-delta)}!`; vsClass = 'good'; }
+        else if (delta > 0) { vsLine = `👻 best was faster by ${fmtTime(delta)}`; vsClass = 'bad'; }
+        else { vsLine = '👻 dead heat with your best!'; vsClass = 'even'; }
       }
-      const rec = buildSoloRecord(this.soloMoves || [], this.raceTime, playerName, myColorIdx);
+      const rec = buildSoloRecord(soloMoves, this.raceTime, playerName, myColorIdx);
       const isNewBest = saveBestGhost(seedStr, rec);
-      if (isNewBest) { vsLine = ghostCs != null ? vsLine : '🏆 new best — race again to chase it!'; vsColor = '#90d090'; }
+      if (isNewBest) { vsLine = ghostCs != null ? vsLine : '🏆 new best — race again to chase it!'; vsClass = 'good'; }
       // Submit with the one-time token issued at race-start; clear it immediately
       // so a second call (e.g. from a scene restart) can't reuse the same token.
       const token = soloToken; soloToken = null;
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token);
-      panelH = 112 + (vsLine ? 16 : 0); // room for the Share button (+ vs line)
     }
 
-    this.add.rectangle(W/2, H/2, 280*RES, panelH*RES, 0x0a1828, 230).setScrollFactor(0);
-    this.add.text(W/2, H/2 - (panelH/2 - 14)*RES, watching ? '🦀  REPLAY  🦀' : '🦀  FINISH!  🦀', {
-      fontFamily: 'monospace', fontSize: fs(20),
-      color: '#e8e030', stroke: '#000', strokeThickness: 4,
-    }).setOrigin(0.5).setScrollFactor(0);
-    this.add.text(W/2, H/2 - (panelH/2 - 40)*RES, `Time: ${fmtTime(shownCs)}`, {
-      fontFamily: 'monospace', fontSize: fs(13),
-      color: '#ffffff', stroke: '#000', strokeThickness: 3,
-    }).setOrigin(0.5).setScrollFactor(0);
-    if (vsLine) {
-      this.add.text(W/2, H/2 - (panelH/2 - 58)*RES, vsLine, {
-        fontFamily: 'monospace', fontSize: fs(11), color: vsColor,
-        stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0);
-    }
+    let html = `<h2>${watching ? '🦀 REPLAY 🦀' : '🦀 FINISH! 🦀'}</h2>`;
+    html += `<div class="r-time">Time: ${fmtTime(shownCs)}</div>`;
+    if (vsLine) html += `<div class="r-vs ${vsClass}">${vsLine}</div>`;
+    html += `<div class="r-actions">${watching ? '' : `<button id="r-share">📋 Share replay</button>`}</div>`;
+    html += `<div class="r-hint">${watching ? 'tap 🏠 Home' : 'tap anywhere or press space to race again · 🏠 Home'}</div>`;
+    showResultPanel(html);
 
-    let shareBtn = null;
+    // Share-replay button: packs the whole race into a portable #replay link
+    // that replays on any instance (see soloReplayShareUrl).
     if (!watching) {
-      // Share-replay button: packs the whole race into a portable #replay link
-      // that replays on any instance (see soloReplayShareUrl).
-      const soloMoves = this.soloMoves || [];
-      shareBtn = this.add.text(W/2, H/2 + (panelH/2 - 34)*RES, '📋 Share replay', {
-        fontFamily: 'monospace', fontSize: fs(12),
-        color: '#7ec8e3', backgroundColor: '#16283c',
-        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
-      shareBtn.on('pointerup', async () => {
+      const shareBtn = $id('r-share');
+      shareBtn.onclick = async () => {
         const rec = buildSoloRecord(soloMoves, this.raceTime, playerName, myColorIdx);
         const { url, tooLong } = soloReplayShareUrl(rec);
         const ok = await copyToClipboard(url);
-        shareBtn.setText(ok ? (tooLong ? '✅ Copied (long link!)' : '✅ Link copied!') : '⚠ Copy failed — see console');
+        shareBtn.textContent = ok ? (tooLong ? '✅ Copied (long link!)' : '✅ Link copied!') : '⚠ Copy failed — see console';
+        shareBtn.classList.toggle('copied', ok);
         if (!ok) console.log('Replay link:', url);
-        shareBtn.setColor(ok ? '#90d090' : '#ff9060');
-        this.time.delayedCall(2200, () => { shareBtn.setText('📋 Share replay'); shareBtn.setColor('#7ec8e3'); });
-      });
+        setTimeout(() => { shareBtn.textContent = '📋 Share replay'; shareBtn.classList.remove('copied'); }, 2200);
+      };
     }
 
-    this.add.text(W/2, H/2 + (panelH/2 - 10)*RES,
-      watching ? 'tap 🏠 Home' : 'tap or space to race again · 🏠 Home', {
-      fontFamily: 'monospace', fontSize: fs(11), color: '#7ec8e3',
-      stroke: '#000', strokeThickness: 3,
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    // Only a live race restarts on tap; a replay just sits on the results. Guard
-    // the tap-anywhere restart so a tap ON the Share button copies the link
-    // instead of restarting (the scene-level pointerdown otherwise fires first
-    // and tears the scene down before the button's pointerup runs).
+    // Only a live race restarts on tap; a replay just sits on the results. The
+    // result panel sits above the canvas in its own DOM layer, so a tap on it
+    // (e.g. the Share button) never reaches this canvas-level listener.
     if (!watching) {
       this.time.delayedCall(400, () => {
-        this.input.on('pointerdown', (pointer, currentlyOver) => {
-          if (shareBtn && currentlyOver && currentlyOver.includes(shareBtn)) return;
-          this.scene.restart();
-        });
+        this.input.on('pointerdown', () => this.scene.restart());
         this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
       });
     }
@@ -2434,92 +2409,63 @@ class RaceScene extends Phaser.Scene {
     this.statusText.setText('');
 
     const rows = Array.isArray(results) ? results : [];
-    const { width: W, height: H } = this.scale;
 
     // A recorded, replayable race (has a raceId and we weren't already watching
-    // a replay) gets a Share button, which needs an extra row of panel height.
+    // a replay) gets a Share button.
     const canShare = !!currentRaceId && !replayMode;
-    const rowH   = 14;
-    // Extra height for post-race action buttons:
-    //   Race Again (host only, 18px) + Back to Lobby (18px) + Leave Room (18px) + 6px gap
-    const btnH   = (isHost ? 18 : 0) + 18 + 18 + 6;
-    const panelH = 44 + rows.length * rowH + (canShare ? 18 : 0) + btnH;
-    this.add.rectangle(W/2, H/2, 300*RES, panelH*RES, 0x0a1828, 235).setScrollFactor(0);
-    this.add.text(W/2, H/2 - (panelH/2 - 10)*RES, '🏁  RESULTS  🏁', {
-      fontFamily: 'monospace', fontSize: fs(16),
-      color: '#e8e030', stroke: '#000', strokeThickness: 4,
-    }).setOrigin(0.5).setScrollFactor(0);
 
-    let y = H/2 - (panelH/2 - 28)*RES;
+    let rowsHtml = '';
     for (const r of rows) {
-      const hex   = PALETTE_HEX[r.colorIdx] || PALETTE_HEX[0];
-      const isMe  = r.id === myPlayerId;
-      const rank  = r.dnf ? 'DNF' : ordinal(r.place);
-      const time  = r.dnf ? '—' : fmtTime(r.finishTimeCs);
-      const label = `${rank.padEnd(4)} ${String(r.name).slice(0,12).padEnd(12)} ${time}`;
-      this.add.text(W/2, y, label, {
-        fontFamily: 'monospace', fontSize: fs(11),
-        color: r.dnf ? '#888' : hex,
-        stroke: '#000', strokeThickness: isMe ? 4 : 3,
-      }).setOrigin(0.5).setScrollFactor(0);
-      y += rowH * RES;
+      const hex      = PALETTE_HEX[r.colorIdx] || PALETTE_HEX[0];
+      const isMe     = r.id === myPlayerId;
+      const rank     = r.dnf ? 'DNF' : ordinal(r.place);
+      const time     = r.dnf ? '—' : fmtTime(r.finishTimeCs);
+      const placeCls = !r.dnf && r.place <= 3 ? ` place-${r.place}` : '';
+      rowsHtml += `<div class="r-row${r.dnf ? ' dnf' : ''}${isMe ? ' me' : ''}${placeCls}">` +
+        `<span class="r-rank">${rank}</span>` +
+        `<span class="r-name" style="color:${r.dnf ? '#888' : hex}">${escHtml(String(r.name).slice(0, 12))}</span>` +
+        `<span class="r-rtime">${time}</span>` +
+      `</div>`;
     }
+
+    let html = `<h2>🏁 RESULTS 🏁</h2><div id="result-rows">${rowsHtml}</div><div class="r-actions">`;
+    if (canShare) html += `<button id="r-share">📋 Share replay</button>`;
+    if (isHost)   html += `<button id="r-again" class="primary">🏁 Race Again</button>`;
+    html += `<button id="r-lobby">🏠 Back to Lobby</button>`;
+    html += `<button id="r-leave" class="danger">🚪 Leave Room</button>`;
+    html += `</div>`;
+    showResultPanel(html);
 
     // Share-replay button: copies a ?replay=<raceId> link to the clipboard so
-    // anyone can watch this exact race. Interactive Phaser text (canvas UI).
+    // anyone can watch this exact race.
     if (canShare) {
-      const shareBtn = this.add.text(W/2, y + 2*RES, '📋 Share replay', {
-        fontFamily: 'monospace', fontSize: fs(12),
-        color: '#7ec8e3', backgroundColor: '#16283c',
-        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+      const shareBtn = $id('r-share');
       const raceId = currentRaceId;
-      shareBtn.on('pointerup', async () => {
+      shareBtn.onclick = async () => {
         const ok = await copyToClipboard(replayShareUrl(raceId));
-        shareBtn.setText(ok ? '✅ Link copied!' : '⚠ Copy failed — see console');
+        shareBtn.textContent = ok ? '✅ Link copied!' : '⚠ Copy failed — see console';
+        shareBtn.classList.toggle('copied', ok);
         if (!ok) console.log('Replay link:', replayShareUrl(raceId));
-        shareBtn.setColor(ok ? '#90d090' : '#ff9060');
-        this.time.delayedCall(2000, () => { shareBtn.setText('📋 Share replay'); shareBtn.setColor('#7ec8e3'); });
-      });
-      y += 18 * RES;
+        setTimeout(() => { shareBtn.textContent = '📋 Share replay'; shareBtn.classList.remove('copied'); }, 2000);
+      };
     }
-
-    // ── post-race action buttons ────────────────────────────────────────────
-    y += 6 * RES; // small gap before buttons
 
     // Race Again — host only. Sends start-match to kick off a new race with the
     // same group without anyone leaving. The server already reset the room.
     if (isHost) {
-      const raceAgainBtn = this.add.text(W/2, y, '🏁 Race Again', {
-        fontFamily: 'monospace', fontSize: fs(12),
-        color: '#90d090', backgroundColor: '#0a1820',
-        padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
-      }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
-      raceAgainBtn.on('pointerup', () => {
+      $id('r-again').onclick = () => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'start-match' }));
         }
-      });
-      y += 18 * RES;
+      };
     }
 
     // Back to Lobby — returns to the in-room lobby overlay (keeps WS connection).
     // From there the host can still hit Start Match; others can wait or leave.
-    const lobbyBtn = this.add.text(W/2, y, '🏠 Back to Lobby', {
-      fontFamily: 'monospace', fontSize: fs(12),
-      color: '#7ec8e3', backgroundColor: '#0a1820',
-      padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
-    }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
-    lobbyBtn.on('pointerup', () => backToLobby());
-    y += 18 * RES;
+    $id('r-lobby').onclick = () => backToLobby();
 
     // Leave Room — fully disconnects and returns to the home screen.
-    const leaveBtn = this.add.text(W/2, y, '🚪 Leave Room', {
-      fontFamily: 'monospace', fontSize: fs(11),
-      color: '#c08060', backgroundColor: '#0a1820',
-      padding: { x: 8*RES, y: 4*RES }, stroke: '#000', strokeThickness: 3,
-    }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
-    leaveBtn.on('pointerup', () => goHome());
+    $id('r-leave').onclick = () => goHome();
   }
 }
 

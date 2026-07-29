@@ -131,6 +131,22 @@ function postLeaderboard(req, res) {
 function serveStatic(req, res) {
   const route = req.url.split('?')[0];
 
+  // CORS preflight — needed whenever the static site and this API live on
+  // different origins (e.g. docker-compose's nginx:8080 + server:3000).
+  // POST /leaderboard sends Content-Type: application/json, which isn't a
+  // CORS-simple header, so the browser preflights with OPTIONS before it will
+  // send the real request. Without a 2xx reply here that preflight fails and
+  // the browser blocks the POST outright — same-origin deploys never notice.
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin':  '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
   // Client config — the browser fetches this on load to learn the WebSocket URL.
   // Empty unless PUBLIC_WS_URL is set; when empty the client defaults to the
   // origin that served the page, so no config is needed for same-host deploys.
@@ -323,7 +339,7 @@ const DEFAULT_GAME_CONFIG = {
     { type: 'hole',  effect: 'stun',  turns: 4, msg: 'FELL IN A HOLE!'     },
     { type: 'jelly', effect: 'stun',  turns: 2, msg: 'STUNG!'              },
     { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-    { type: 'beach', effect: 'push',             msg: 'TOURIST KICKED YOU!' },
+    { type: 'beach', effect: 'push',  dist: 3,   msg: 'TOURIST KICKED YOU!' },
     { type: 'net',   effect: 'stun',  turns: 2, msg: 'TANGLED IN A NET!'   },
   ],
 };
