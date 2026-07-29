@@ -242,6 +242,7 @@
   .r-lb-row.lb-2 { border-left-color: #b8c4d0; }
   .r-lb-row.lb-3 { border-left-color: #c88040; }
   .r-lb-empty { font-size: 12px; color: #506080; padding: 4px 8px; }
+  .r-lb-sep   { font-size: 12px; color: #506080; padding: 2px 8px; letter-spacing: 2px; }
   .r-row {
     display: flex; align-items: center; gap: 10px;
     font-size: 15px; padding: 6px 10px; border-left: 3px solid transparent;
@@ -1229,18 +1230,28 @@ async function fetchLeaderboard(seed) {
 function renderLeaderboard(board, currentPlayerName) {
   if (!Array.isArray(board) || board.length === 0) return '';
   const name = (currentPlayerName || '').toLowerCase();
-  let html = `<div class="r-lb"><div class="r-lb-title">Seed Leaderboard</div>`;
-  board.forEach((entry, i) => {
+  const myIdx = name ? board.findIndex(e => e.name.toLowerCase() === name) : -1;
+
+  const renderRow = (entry, i) => {
     const rank = i + 1;
     const hex  = PALETTE_HEX[entry.colorIdx] || PALETTE_HEX[0];
-    const isMe = name && entry.name.toLowerCase() === name;
+    const isMe = i === myIdx;
     const cls  = `r-lb-row${isMe ? ' lb-me' : ''}${rank <= 3 ? ` lb-${rank}` : ''}`;
-    html += `<div class="${cls}">` +
+    return `<div class="${cls}">` +
       `<span class="lb-rank">${rank}</span>` +
       `<span class="lb-name" style="color:${hex}">${escapeHtml(String(entry.name).slice(0, 16))}</span>` +
       `<span class="lb-time">${fmtTime(entry.timeCs)}</span>` +
     `</div>`;
-  });
+  };
+
+  let html = `<div class="r-lb"><div class="r-lb-title">Seed Leaderboard</div>`;
+  // Always show top 3.
+  board.slice(0, 3).forEach((entry, i) => { html += renderRow(entry, i); });
+  // If the current player is outside the top 3, show a divider then their row.
+  if (myIdx >= 3) {
+    html += `<div class="r-lb-sep">…</div>`;
+    html += renderRow(board[myIdx], myIdx);
+  }
   html += `</div>`;
   return html;
 }
