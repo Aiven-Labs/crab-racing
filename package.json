@@ -5,13 +5,17 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "iovalkey": "^0.3.1",
     "kafkajs": "^2.2.4",
     "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
   },
   "engines": {
     "node": ">=18"

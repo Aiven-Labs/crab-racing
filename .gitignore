@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Playwright e2e test output
+test-results/
+playwright-report/
+
 # Local env / secrets
 .env
 .env.local
