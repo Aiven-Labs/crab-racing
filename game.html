@@ -2228,11 +2228,11 @@ class RaceScene extends Phaser.Scene {
     if (obs && obs.effect === 'stun') {
       this.stunTurns = obs.turns;
       // Brief lock prevents rapid taps from burning through stun turns instantly.
-      this.inputBlockedUntil = Date.now() + 150;
+      this.inputBlockedUntil = Date.now() + 1500;
     }
     if (isPush) {
       // Block input for the full push animation (80ms move + 200ms delay + 120ms push).
-      this.inputBlockedUntil = Date.now() + 450;
+      this.inputBlockedUntil = Date.now() + 4500;
     }
 
     if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
