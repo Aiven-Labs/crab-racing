@@ -236,6 +236,7 @@
     <!-- Shown to the lobby host once 2+ players are in, so they can start the
          race before the lobby's join window elapses. -->
     <button id="btn-start" class="hidden">Start Match</button>
+    <button id="btn-leave" class="hidden">Leave Room</button>
   </div>
 </div>
 
@@ -848,6 +849,7 @@ function handleServerMsg(msg) {
       $id('btn-multi').disabled   = true;
       // If we're the host and the room was just created, show the auto-close timer.
       if (isHost && msg.soloAutocloseMs > 0) startSoloAutocloseCountdown(msg.soloAutocloseMs);
+      $id('btn-leave').classList.remove('hidden');
       break;
     case 'player-joined':
       setStatus(`${msg.players.length} player(s) ready`);
@@ -940,6 +942,7 @@ function handleServerMsg(msg) {
       if (ws) { try { ws.close(); } catch {} ws = null; }
       myPlayerId = null;
       isHost     = false;
+      $id('btn-leave').classList.add('hidden');
       break;
     case 'player-disconnected':
       if (!gameScene && msg.players) {
@@ -1389,6 +1392,7 @@ function goHome() {
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
   $id('btn-start').classList.add('hidden');
+  $id('btn-leave').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
   // Re-enable join inputs so the player can join a new room.
@@ -1397,7 +1401,8 @@ function goHome() {
   $id('btn-multi').disabled   = false;
 }
 
-$id('btn-home').onclick = goHome;
+$id('btn-home').onclick  = goHome;
+$id('btn-leave').onclick = goHome;
 
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
