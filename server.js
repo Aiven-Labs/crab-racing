@@ -339,7 +339,7 @@ const DEFAULT_GAME_CONFIG = {
     { type: 'hole',  effect: 'stun',  turns: 4, msg: 'FELL IN A HOLE!'     },
     { type: 'jelly', effect: 'stun',  turns: 2, msg: 'STUNG!'              },
     { type: 'rock',  effect: 'block',            msg: 'BLOCKED BY ROCK!'    },
-    { type: 'beach', effect: 'push',  dist: 3,   msg: 'TOURIST KICKED YOU!' },
+    { type: 'beach', effect: 'push',  dist: 10,  msg: 'TOURIST KICKED YOU!' },
     { type: 'net',   effect: 'stun',  turns: 2, msg: 'TANGLED IN A NET!'   },
   ],
 };
