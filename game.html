@@ -1956,6 +1956,10 @@ class RaceScene extends Phaser.Scene {
 
   // Advance the ghost by one recorded input (same movement rules as _soloStep,
   // but operating on ghost state + sprite; no finish handler, no HUD/camera fx).
+  // Clears busy immediately (not on tween completion) so the ghost can be
+  // driven back-to-back at the recorded pace, same as the live crab's
+  // _soloStep — otherwise a run with moves spaced closer than the 160ms tween
+  // duration gets throttled and the ghost lags behind its own recorded time.
   _ghostStep(dx, dlane) {
     const g = this.ghost;
     if (!g || g.busy || g.won) return;
@@ -1964,8 +1968,13 @@ class RaceScene extends Phaser.Scene {
     if (nc < 0 || nc >= TOTAL_CELLS || nl < 0 || nl >= LANES) return;
     const obs = OBS_MAP.get(`${nc},${nl}`);
     if (obs?.effect === 'block') return;
-    g.busy = true;
+
+    g.cell = nc; g.lane = nl; g.busy = false;
+    if (obs?.effect === 'stun') g.stun = obs.turns;
+    if (g.cell >= FINISH_CELL) g.won = true;
+
     if (dx !== 0) g.spr.play('walk_' + (g.record.players?.[0]?.colorIdx || 0), true);
+    this.tweens.killTweensOf(g.spr);
     this.tweens.add({
       targets: g.spr,
       x: nc * CELLR + CELLR/2,
@@ -1973,17 +1982,14 @@ class RaceScene extends Phaser.Scene {
       duration: 160, ease: 'Linear',
       onUpdate:  () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES),
       onComplete: () => {
-        g.cell = nc; g.lane = nl; g.busy = false;
-        if (obs?.effect === 'stun') g.stun = obs.turns;
-        else if (obs?.effect === 'push') {
-          const pushCell = Math.max(0, g.cell - (obs.dist ?? 1));
-          this.tweens.add({ targets: g.spr, x: pushCell*CELLR + CELLR/2, duration: 120, ease: 'Linear',
-            onUpdate: () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES),
-            onComplete: () => { g.cell = pushCell; } });
-        }
         g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES);
-        if (g.cell >= FINISH_CELL) { g.won = true; g.spr.stop?.(); g.spr.setFrame(0); }
-        else { g.spr.stop?.(); g.spr.setFrame(0); }
+        if (obs?.effect === 'push') {
+          const pushCell = Math.max(0, g.cell - (obs.dist ?? 1));
+          g.cell = pushCell;
+          this.tweens.add({ targets: g.spr, x: pushCell*CELLR + CELLR/2, duration: 120, ease: 'Linear',
+            onUpdate: () => g.lbl.setPosition(g.spr.x, g.spr.y - 10*RES) });
+        }
+        g.spr.stop?.(); g.spr.setFrame(0);
       },
     });
   }
