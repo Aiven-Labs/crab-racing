@@ -842,6 +842,10 @@ function handleServerMsg(msg) {
       setStatus(`Lobby · ${msg.players.length} player(s) — waiting… (seed ${msg.seed})`);
       setPlayerList(msg.players);
       updateStartButton(msg.players.length);
+      // Disable join inputs so the player can't submit a second join while in the lobby.
+      $id('player-name').disabled = true;
+      $id('room-code').disabled   = true;
+      $id('btn-multi').disabled   = true;
       // If we're the host and the room was just created, show the auto-close timer.
       if (isHost && msg.soloAutocloseMs > 0) startSoloAutocloseCountdown(msg.soloAutocloseMs);
       break;
@@ -1387,6 +1391,10 @@ function goHome() {
   $id('btn-start').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
+  // Re-enable join inputs so the player can join a new room.
+  $id('player-name').disabled = false;
+  $id('room-code').disabled   = false;
+  $id('btn-multi').disabled   = false;
 }
 
 $id('btn-home').onclick = goHome;
