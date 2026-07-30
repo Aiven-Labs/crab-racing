@@ -2428,7 +2428,7 @@ class RaceScene extends Phaser.Scene {
     }
     if (isPush) {
       // Block input for the full push animation (80ms move + 200ms delay + 120ms push).
-      this.inputBlockedUntil = Date.now() + 4500;
+      this.inputBlockedUntil = Date.now() + 1800;
     }
 
     if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
