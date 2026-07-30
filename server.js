@@ -200,6 +200,14 @@ function serveStatic(req, res) {
     return;
   }
 
+  // Daily challenge ghost — POST saves a completed run's inputs; GET returns
+  // the top ghosts for a given date so new players can race against them.
+  if (route === '/daily-ghost') {
+    if (req.method === 'POST') { postDailyGhost(req, res); return; }
+    if (req.method === 'GET')  { getDailyGhosts(req, res); return; }
+    res.writeHead(405); res.end('405 Method Not Allowed'); return;
+  }
+
   // "/" → game.html, anything else → filename in project dir.
   // Decode percent-escapes so a request like /%2e%2e/.env can't smuggle a
   // traversal past the containment check below.
@@ -721,6 +729,80 @@ async function getLeaderboard(seed) {
   } catch (err) {
     console.error('[valkey] getLeaderboard error:', err.message);
     return [];
+  }
+}
+
+// ── daily challenge ghosts ─────────────────────────────────────────────────────
+// Stores solo run inputs for the daily seed (date string YYYY-MM-DD) so later
+// players can race against translucent ghost crabs of the fastest finishers.
+// Valkey key: daily:ghosts:<date> — sorted set, score = finishTimeCs (ascending),
+// member = JSON {name, colorIdx, moves, finishTimeCs}. Capped at 10 entries;
+// expires after 48 h so old days clean themselves up.
+
+const DAILY_GHOST_MAX    = 10;
+const DAILY_GHOST_RETURN = 3;
+const DAILY_GHOST_TTL    = 48 * 60 * 60; // 48 h
+const DAILY_DATE_RE      = /^\d{4}-\d{2}-\d{2}$/;
+
+function dailyGhostKey(date) { return `daily:ghosts:${date}`; }
+
+/** POST /daily-ghost — save a completed daily-challenge run's inputs.
+ *  Body: { date, name, colorIdx, moves, finishTimeCs, token }
+ *  Validates the solo token (same single-use mechanism as /leaderboard), then
+ *  upserts into the sorted set, keeping only the DAILY_GHOST_MAX fastest. */
+function postDailyGhost(req, res) {
+  let raw = '';
+  req.on('data', chunk => { raw += chunk; if (raw.length > 128 * 1024) req.destroy(); });
+  req.on('end', async () => {
+    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+               || req.socket.remoteAddress || 'unknown';
+    if (!await rateLimit(`rl:dg:${ip}`, RL_LB_LIMIT, RL_LB_WINDOW_SECS)) {
+      return sendJson(res, 429, { error: 'rate limited' });
+    }
+
+    let body;
+    try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+
+    const date     = String(body.date || '').slice(0, 10);
+    if (!DAILY_DATE_RE.test(date)) return sendJson(res, 400, { error: 'invalid date' });
+    const name     = String(body.name || 'Crab').slice(0, 20);
+    const colorIdx = Number(body.colorIdx) || 0;
+    const timeCs   = Number(body.finishTimeCs);
+    if (!isValidTimeCs(timeCs)) return sendJson(res, 400, { error: 'invalid finishTimeCs' });
+    const moves    = body.moves;
+    if (!Array.isArray(moves) || moves.length === 0) return sendJson(res, 400, { error: 'moves required' });
+
+    if (valkey?.status !== 'ready') return sendJson(res, 200, { ok: true });
+
+    const member = JSON.stringify({ name, colorIdx, moves, finishTimeCs: timeCs });
+    const key    = dailyGhostKey(date);
+    try {
+      await valkey.zadd(key, timeCs, member);
+      // Keep only the fastest DAILY_GHOST_MAX; zremrangebyrank removes by rank
+      // ascending — rank 0 is lowest score (fastest), so remove from the slow end.
+      await valkey.zremrangebyrank(key, DAILY_GHOST_MAX, -1);
+      await valkey.expire(key, DAILY_GHOST_TTL);
+    } catch (err) {
+      console.error('[valkey] postDailyGhost error:', err.message);
+    }
+    sendJson(res, 200, { ok: true });
+  });
+}
+
+/** GET /daily-ghost?date=YYYY-MM-DD — returns top DAILY_GHOST_RETURN ghosts
+ *  for the given date, sorted fastest first. Returns [] when Valkey is down. */
+async function getDailyGhosts(req, res) {
+  const date = new URLSearchParams(req.url.split('?')[1] || '').get('date') || '';
+  if (!DAILY_DATE_RE.test(date)) return sendJson(res, 400, { error: 'invalid date' });
+  if (valkey?.status !== 'ready') return sendJson(res, 200, []);
+  try {
+    const members = await valkey.zrange(dailyGhostKey(date), 0, DAILY_GHOST_RETURN - 1);
+    const ghosts  = members.map(m => { try { return JSON.parse(m); } catch { return null; } })
+                           .filter(Boolean);
+    sendJson(res, 200, ghosts);
+  } catch (err) {
+    console.error('[valkey] getDailyGhosts error:', err.message);
+    sendJson(res, 200, []);
   }
 }
 

@@ -345,6 +345,7 @@
       </div>
     </details>
     <button id="btn-solo">Solo Race</button>
+    <button id="btn-daily">⭐ Daily Challenge</button>
     <hr>
     <!-- Browse active public rooms. Fetches GET /rooms; clicking a row fills in
          the room code. Refresh button reloads the list. -->
@@ -448,6 +449,8 @@ let replayMode   = false; // true while watching a recorded race (spectator, no 
 let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
 let soloToken     = null;  // one-time token issued by GET /solo-token before each solo race
 let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
+let dailyChallengeMode = false; // true while playing the daily challenge
+let dailyServerGhosts  = [];    // ghost records fetched from server for the daily challenge
 
 // ─── reconnection state ────────────────────────────────────────────────────────
 // When the server issues a reconnect token at join time the client stores it so
@@ -1332,6 +1335,42 @@ async function startSolo() {
   startGame(false);
 }
 
+function dailyChallengeDate() {
+  // YYYY-MM-DD in the browser's local timezone — everyone on the same calendar
+  // day plays the same track, regardless of UTC offset.
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+async function startDailyChallenge() {
+  saveNamePref(($id('player-name').value.trim() || 'Crab'));
+  dailyChallengeMode = true;
+  dailyServerGhosts  = [];
+
+  const date = dailyChallengeDate();
+
+  // Fixed daily config: track length 100, default lanes, all obstacle kinds.
+  applyLobbyConfig({ trackLength: 100 });
+  buildObstacles(date);
+
+  // Fetch server ghosts so we can race against today's fastest players.
+  try {
+    const r = await fetch(`${leaderboardBase()}/daily-ghost?date=${date}`);
+    if (r.ok) dailyServerGhosts = (await r.json()) || [];
+  } catch { dailyServerGhosts = []; }
+
+  soloToken = null;
+  try {
+    const resp = await fetch(`${leaderboardBase()}/solo-token`);
+    if (resp.ok) { const data = await resp.json(); soloToken = data.token ?? null; }
+  } catch {}
+
+  $id('lobby').classList.add('hidden');
+  startGame(false);
+}
+
 // ─── auto-reconnect ────────────────────────────────────────────────────────────
 // Called by ws.onclose for multiplayer sockets. If the player has a valid
 // reconnect token (i.e. they haven't intentionally gone home) we retry every
@@ -1613,8 +1652,10 @@ function goHome() {
   lobbyLocked  = false;
   replayMode   = false;
   currentRaceId = null;
-  soloToken     = null;           // discard any unused solo race token
-  pendingSoloReplay = null;
+  soloToken          = null;   // discard any unused solo race token
+  pendingSoloReplay  = null;
+  dailyChallengeMode = false;
+  dailyServerGhosts  = [];
   cancelSoloAutocloseCountdown(); // clear any lingering room auto-close notice
   // Drop any ?replay= / #replay= from the address bar so a refresh doesn't
   // re-launch the replay.
@@ -1633,6 +1674,7 @@ function goHome() {
 
 $id('btn-home').onclick  = goHome;
 $id('btn-leave').onclick = goHome;
+$id('btn-daily').onclick = startDailyChallenge;
 
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
@@ -1963,8 +2005,10 @@ class RaceScene extends Phaser.Scene {
     // Racing against a stored PB adds a "vs 👻" note to the normal input hint.
     const footer = replayMode
       ? '● REPLAY — watching a recorded race · 🏠 Home'
-      : (this.ghost ? '🏁 racing your best 👻 · tap/→ move · swipe ↑↓ lane'
-                    : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)');
+      : dailyChallengeMode
+        ? `⭐ Daily Challenge ${dailyChallengeDate()} · tap/→ move · swipe ↑↓ lane`
+        : (this.ghost ? '🏁 racing your best 👻 · tap/→ move · swipe ↑↓ lane'
+                      : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)');
     this.add.text(W / 2, H - 6 * RES, footer, {
       fontFamily: 'monospace', fontSize: fs(10),
       color: replayMode ? '#e8d030' : '#ffffff', stroke: '#000', strokeThickness: 3,
@@ -2031,9 +2075,13 @@ class RaceScene extends Phaser.Scene {
     // run for this seed+track, spawn a translucent ghost crab that re-runs it so
     // the player can race their PB. Set up first so it renders BEHIND the live crab.
     this.ghost = null;
+    this.serverGhosts = [];
     if (!replayMode) {
       const best = loadBestGhost(raceSeed != null ? String(raceSeed) : '');
       if (best && best.moves.length) this._setupGhost(best, trackTop);
+      if (dailyChallengeMode && dailyServerGhosts.length) {
+        this._setupServerGhosts(dailyServerGhosts, trackTop);
+      }
     }
 
     this.crab = this.add.sprite(CELLR/2, trackTop + this.lane * CELLR + CELLR/2, key)
@@ -2074,19 +2122,50 @@ class RaceScene extends Phaser.Scene {
       color: '#c8d8ff', stroke: '#000', strokeThickness: 3,
     }).setOrigin(0.5, 1).setAlpha(0.6);
     this.ghost = {
-      record, spr, lbl, trackTop,
+      record, spr, lbl, trackTop, colorIdx: ghostColor,
+      moves: record.moves,
       cell: 0, lane: startLane, stun: 0, busy: false, won: false, idx: 0,
     };
   }
 
-  // Advance the ghost by one recorded input (same movement rules as _soloStep,
-  // but operating on ghost state + sprite; no finish handler, no HUD/camera fx).
-  // Clears busy immediately (not on tween completion) so the ghost can be
-  // driven back-to-back at the recorded pace, same as the live crab's
-  // _soloStep — otherwise a run with moves spaced closer than the 160ms tween
-  // duration gets throttled and the ghost lags behind its own recorded time.
-  _ghostStep(dx, dlane) {
-    const g = this.ghost;
+  // Set up ghost sprites for each server ghost record (daily challenge).
+  // Each ghost gets its recorded crab colour and shows the player's name.
+  _setupServerGhosts(records, trackTop) {
+    this.serverGhosts = [];
+    records.forEach((rec, i) => {
+      const ghostColor = (rec.colorIdx | 0) % CRAB_PALETTES.length;
+      const key = `crab_${ghostColor}`;
+      if (!this.textures.exists(key)) {
+        const tex = this.textures.addCanvas(key, makeCrabSheet(CRAB_PALETTES[ghostColor]));
+        for (let j = 0; j < 4; j++) tex.add(j, 0, j * 32, 0, 32, 32);
+      }
+      if (!this.anims.exists('walk_' + ghostColor)) {
+        this.anims.create({
+          key: 'walk_' + ghostColor,
+          frames: [0,1,2,3].map(j => ({ key, frame: j })),
+          frameRate: 10, repeat: -1,
+        });
+      }
+      // Offset each server ghost slightly in lane so they don't all stack exactly.
+      const startLane = Math.max(0, Math.min(LANES - 1, Math.floor(LANES / 2) + i - 1));
+      const spr = this.add.sprite(CELLR/2, trackTop + startLane * CELLR + CELLR/2, key)
+        .setFrame(0).setScale(RES).setAlpha(0.35);
+      const label = `👻 ${(rec.name || 'Racer').slice(0, 12)}`;
+      const lbl = this.add.text(CELLR/2, trackTop + startLane * CELLR + CELLR/2 - 10*RES, label, {
+        fontFamily: 'monospace', fontSize: fs(7),
+        color: '#ffe080', stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5, 1).setAlpha(0.7);
+      this.serverGhosts.push({
+        spr, lbl, trackTop, colorIdx: ghostColor,
+        moves: rec.moves || [],
+        cell: 0, lane: startLane, stun: 0, busy: false, won: false, idx: 0,
+      });
+    });
+  }
+
+  // Advance any ghost by one recorded input. Operates on the passed ghost state
+  // object so it works for both the local PB ghost and server daily-challenge ghosts.
+  _ghostStepAny(g, dx, dlane) {
     if (!g || g.busy || g.won) return;
     if (g.stun > 0) { g.stun--; return; }
     const nc = g.cell + dx, nl = g.lane + dlane;
@@ -2098,8 +2177,6 @@ class RaceScene extends Phaser.Scene {
     if (obs?.effect === 'stun') g.stun = obs.turns;
     if (g.cell >= FINISH_CELL) g.won = true;
 
-    // Snap ghost to finish immediately so its visual position matches its logical
-    // finish time — no tween lag to make a faster ghost appear still behind you.
     if (g.won) {
       this.tweens.killTweensOf(g.spr);
       g.spr.setX(nc * CELLR + CELLR/2);
@@ -2109,7 +2186,7 @@ class RaceScene extends Phaser.Scene {
       return;
     }
 
-    if (dx !== 0) g.spr.play('walk_' + (g.record.players?.[0]?.colorIdx || 0), true);
+    if (dx !== 0) g.spr.play('walk_' + g.colorIdx, true);
     this.tweens.killTweensOf(g.spr);
     this.tweens.add({
       targets: g.spr,
@@ -2130,18 +2207,24 @@ class RaceScene extends Phaser.Scene {
     });
   }
 
-  // Drive the ghost's recorded inputs on the live race clock (this.raceTime),
-  // so it paces exactly as the original PB run did. Mirrors _pumpReplay.
-  _pumpGhost() {
-    const g = this.ghost;
+  _ghostStep(dx, dlane) { this._ghostStepAny(this.ghost, dx, dlane); }
+
+  // Drive a single ghost on the live race clock. Used for both the local PB ghost
+  // and each server ghost in the daily challenge.
+  _pumpOneGhost(g) {
     if (!g || g.won || this.won || this.raceOver) return;
-    if (g.idx >= g.record.moves.length) return;
-    const m = g.record.moves[g.idx];
+    if (g.idx >= g.moves.length) return;
+    const m = g.moves[g.idx];
     const ready = (this.raceTime >= (m.t | 0)) && !g.busy;
-    if (!ready) { this.time.delayedCall(20, () => this._pumpGhost()); return; }
+    if (!ready) { this.time.delayedCall(20, () => this._pumpOneGhost(g)); return; }
     g.idx++;
-    this._ghostStep(m.dx, m.dlane);
-    this._pumpGhost();
+    this._ghostStepAny(g, m.dx, m.dlane);
+    this._pumpOneGhost(g);
+  }
+
+  _pumpGhost() {
+    if (this.ghost) this._pumpOneGhost(this.ghost);
+    for (const g of (this.serverGhosts || [])) this._pumpOneGhost(g);
   }
 
   _setupMultiCrabs(trackTop) {
@@ -2440,7 +2523,7 @@ class RaceScene extends Phaser.Scene {
     });
     // The ghost re-runs its recorded inputs on this same clock, so it starts
     // pacing the moment the player's race clock does (their first move).
-    if (this.ghost) this._pumpGhost();
+    if (this.ghost || this.serverGhosts?.length) this._pumpGhost();
   }
 
   // ── refreshHUD ──────────────────────────────────────────────────────────────
@@ -2493,6 +2576,24 @@ class RaceScene extends Phaser.Scene {
       // Submit with the one-time token issued at race-start; clear it immediately
       // so a second call (e.g. from a scene restart) can't reuse the same token.
       const token = soloToken; soloToken = null;
+
+      // For the daily challenge, also save this run's inputs to the server so
+      // future players can race against this ghost. Fire-and-forget; failure is
+      // silent — the score still records via submitScore below.
+      if (dailyChallengeMode) {
+        fetch(`${leaderboardBase()}/daily-ghost`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date:         dailyChallengeDate(),
+            name:         playerName,
+            colorIdx:     myColorIdx,
+            moves:        soloMoves,
+            finishTimeCs: this.raceTime,
+          }),
+        }).catch(() => {});
+      }
+
       // Fire-and-forget submit; leaderboard + personal-best updated async once panel is shown.
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token)
         .then(board => {
@@ -2520,7 +2621,10 @@ class RaceScene extends Phaser.Scene {
     };
     const hitTypes = OBSTACLE_KINDS.map(k => k.type).filter(t => this.obstacleCounts[t] > 0);
 
-    let html = `<h2>${watching ? '🦀 REPLAY 🦀' : '🦀 FINISH! 🦀'}</h2>`;
+    const heading = watching ? '🦀 REPLAY 🦀'
+                  : dailyChallengeMode ? `⭐ DAILY ${dailyChallengeDate()} ⭐`
+                  : '🦀 FINISH! 🦀';
+    let html = `<h2>${heading}</h2>`;
     html += `<div class="r-time">Time: ${fmtTime(shownCs)}</div>`;
     if (vsLine) html += `<div class="r-vs ${vsClass}">${vsLine}</div>`;
 
