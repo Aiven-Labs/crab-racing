@@ -2323,6 +2323,40 @@ class RaceScene extends Phaser.Scene {
     this._soloStep(dx, dlane);
   }
 
+  // ── setDizzy ────────────────────────────────────────────────────────────────
+  // Visual feedback for a stunned crab: a wobble tween on the sprite plus an
+  // orbiting "💫" above its head. Shared by solo and multiplayer stun paths so
+  // both look identical. Idempotent — calling with on=true while already dizzy
+  // is a no-op, and on=false always cleans up fully.
+  setDizzy(spr, on) {
+    if (!spr) return;
+    if (on) {
+      if (spr._dizzyFx) return;
+      const star = this.add.text(spr.x, spr.y - 20 * RES, '💫', { fontSize: `${14 * RES}px` })
+        .setOrigin(0.5);
+      const wobble = this.tweens.add({
+        targets: spr, angle: 12, duration: 90, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      });
+      const orbit = { a: 0 };
+      const orbitTween = this.tweens.add({
+        targets: orbit, a: Math.PI * 2, duration: 700, repeat: -1, ease: 'Linear',
+        onUpdate: () => {
+          star.setPosition(
+            spr.x + Math.cos(orbit.a) * 10 * RES,
+            spr.y - 20 * RES + Math.sin(orbit.a) * 5 * RES,
+          );
+        },
+      });
+      spr._dizzyFx = { star, wobble, orbitTween };
+    } else if (spr._dizzyFx) {
+      spr._dizzyFx.wobble.stop();
+      spr._dizzyFx.orbitTween.stop();
+      spr._dizzyFx.star.destroy();
+      spr.angle = 0;
+      delete spr._dizzyFx;
+    }
+  }
+
   // ── _soloStep ───────────────────────────────────────────────────────────────
   // The authoritative solo movement + animation for one input. Shared by live
   // play (move()) and by local replay (_pumpReplay), so a replay animates
@@ -2335,7 +2369,10 @@ class RaceScene extends Phaser.Scene {
       this.cameras.main.shake(120, 0.006);
       const left = this.stunTurns;
       this.statusText.setText(left > 0 ? `STUNNED — ${left} turn${left > 1 ? 's' : ''} left` : 'RECOVERED!');
-      if (left === 0) this.time.delayedCall(600, () => this.statusText.setText(''));
+      if (left === 0) {
+        this.setDizzy(this.crab, false);
+        this.time.delayedCall(600, () => this.statusText.setText(''));
+      }
       return;
     }
 
@@ -2386,6 +2423,7 @@ class RaceScene extends Phaser.Scene {
           if (obs.effect === 'stun') {
             this.statusText.setText(obs.msg);
             this.cameras.main.flash(200, 255, 80, 0);
+            this.setDizzy(this.crab, true);
           } else if (isPush) {
             this.statusText.setText(obs.msg);
             this.cameras.main.shake(150, 0.01);
@@ -2463,6 +2501,8 @@ class RaceScene extends Phaser.Scene {
         });
       }
 
+      this.setDizzy(spr, (p.stunTurns ?? 0) > 0);
+
       if (p.id === myPlayerId) {
         this.cell      = p.cell;
         this.lane      = p.lane;
@@ -2499,6 +2539,7 @@ class RaceScene extends Phaser.Scene {
 
   // ── onPlayerLeft ────────────────────────────────────────────────────────────
   onPlayerLeft(playerId) {
+    this.setDizzy(this.playerCrabs?.get(playerId), false);
     this.playerCrabs?.get(playerId)?.destroy();
     this.playerLabels?.get(playerId)?.destroy();
     this.playerCrabs?.delete(playerId);
