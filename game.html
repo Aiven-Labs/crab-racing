@@ -220,6 +220,11 @@
   #result-panel h2 {
     font-size: 30px; letter-spacing: 2px; color: #e8d030;
     text-shadow: 0 0 10px #a08000; margin-bottom: 8px;
+    white-space: nowrap; overflow: hidden;
+    display: flex; justify-content: center; align-items: center; gap: 6px;
+  }
+  #result-panel h2 .h2-text {
+    font-size: clamp(14px, 7.5vw, 30px); letter-spacing: 1px;
   }
   #result-panel .r-time { font-size: 19px; color: #fff; margin: 10px 0 4px; }
   #result-panel .r-vs   { font-size: 15px; margin-bottom: 6px; }
@@ -2683,7 +2688,7 @@ class RaceScene extends Phaser.Scene {
     const heading = watching ? '🦀 REPLAY 🦀'
                   : dailyChallengeMode ? `⭐ DAILY ${dailyChallengeDate()} ⭐`
                   : '🦀 FINISH! 🦀';
-    let html = `<h2>${heading}</h2>`;
+    let html = `<h2><span class="h2-text">${heading}</span></h2>`;
     html += `<div class="r-time">Time: ${fmtTime(shownCs)}</div>`;
     if (vsLine) html += `<div class="r-vs ${vsClass}">${vsLine}</div>`;
 
@@ -2813,7 +2818,7 @@ class RaceScene extends Phaser.Scene {
     const seedStr = raceSeed != null ? String(raceSeed) : '';
     const myName  = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
 
-    let html = `<h2>🏁 RESULTS 🏁</h2><div id="result-rows">${rowsHtml}</div>`;
+    let html = `<h2><span class="h2-text">🏁 RESULTS 🏁</span></h2><div id="result-rows">${rowsHtml}</div>`;
     // Placeholder replaced async once leaderboard fetch resolves.
     if (seedStr) html += `<div id="r-lb"></div>`;
     html += `<div class="r-actions">`;
