@@ -19,13 +19,14 @@ services:
     environment:
       PORT: 3000
       KAFKA_BROKER: kafka:9092
-      # Valkey connection string (Aiven exposes this as the service URI).
-      # Local docker Valkey has no auth/TLS, so a plain redis:// URI.
       VALKEY_URI: redis://valkey:6379
+      POSTGRES_URI: postgresql://crab:racing@postgres:5432/crabrace
     depends_on:
       kafka:
         condition: service_healthy
       valkey:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   # ── Kafka (KRaft, no Zookeeper) ────────────────────────────────
@@ -55,6 +56,21 @@ services:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgreSQL (daily challenge ghost persistence) ─────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: crabrace
+      POSTGRES_USER: crab
+      POSTGRES_PASSWORD: racing
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crab -d crabrace"]
       interval: 10s
       timeout: 5s
       retries: 5

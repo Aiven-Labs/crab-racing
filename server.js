@@ -18,6 +18,7 @@ const crypto    = require('crypto');
 const WebSocket = require('ws');
 const { Kafka } = require('kafkajs');
 const Valkey    = require('iovalkey');
+const { Pool }  = require('pg');
 
 const MIME = {
   '.html': 'text/html',
@@ -263,6 +264,7 @@ const PUBLIC_WS_URL = process.env.PUBLIC_WS_URL || '';
 // the PEM text inline or a path to a .pem file (same as the Kafka certs below).
 const VALKEY_URI     = process.env.VALKEY_URI || 'redis://localhost:6379';
 const VALKEY_CA_CERT = process.env.VALKEY_CA_CERT;
+const POSTGRES_URI   = process.env.POSTGRES_URI;
 
 // Aiven hands out valkey:// / valkeys:// URIs; iovalkey (ioredis under the hood)
 // only speaks redis:// / rediss://. Normalise the scheme and report whether it's
@@ -578,6 +580,9 @@ function buildObstacles(seed, config) {
 // works — the leaderboard just silently no-ops rather than taking the server down.
 let valkey = null;
 
+// pg Pool for daily challenge ghost persistence. Null when POSTGRES_URI is unset.
+let pgPool = null;
+
 // The Kafka client, set in main(). Exposed at module scope so the replay
 // fallback (loadRaceFromKafka) can spin up a throwaway consumer to reconstruct
 // a race from the durable log when Valkey doesn't have it.
@@ -733,23 +738,18 @@ async function getLeaderboard(seed) {
 }
 
 // ── daily challenge ghosts ─────────────────────────────────────────────────────
-// Stores solo run inputs for the daily seed (date string YYYY-MM-DD) so later
-// players can race against translucent ghost crabs of the fastest finishers.
-// Valkey key: daily:ghosts:<date> — sorted set, score = finishTimeCs (ascending),
-// member = JSON {name, colorIdx, moves, finishTimeCs}. Capped at 10 entries;
-// expires after 48 h so old days clean themselves up.
+// Persists ghost run inputs in PostgreSQL (daily_ghosts table) so players can
+// race against translucent crabs of the day's fastest finishers across sessions.
+// Keeps at most DAILY_GHOST_MAX rows per date; returns DAILY_GHOST_RETURN on GET.
 
 const DAILY_GHOST_MAX    = 10;
 const DAILY_GHOST_RETURN = 3;
-const DAILY_GHOST_TTL    = 48 * 60 * 60; // 48 h
 const DAILY_DATE_RE      = /^\d{4}-\d{2}-\d{2}$/;
 
-function dailyGhostKey(date) { return `daily:ghosts:${date}`; }
-
 /** POST /daily-ghost — save a completed daily-challenge run's inputs.
- *  Body: { date, name, colorIdx, moves, finishTimeCs, token }
- *  Validates the solo token (same single-use mechanism as /leaderboard), then
- *  upserts into the sorted set, keeping only the DAILY_GHOST_MAX fastest. */
+ *  Body: { date, name, colorIdx, moves, finishTimeCs }
+ *  Rate-limited by IP. Inserts a row then prunes slow stragglers so the table
+ *  never exceeds DAILY_GHOST_MAX rows per date. Degrades silently when PG is down. */
 function postDailyGhost(req, res) {
   let raw = '';
   req.on('data', chunk => { raw += chunk; if (raw.length > 128 * 1024) req.destroy(); });
@@ -772,36 +772,50 @@ function postDailyGhost(req, res) {
     const moves    = body.moves;
     if (!Array.isArray(moves) || moves.length === 0) return sendJson(res, 400, { error: 'moves required' });
 
-    if (valkey?.status !== 'ready') return sendJson(res, 200, { ok: true });
-
-    const member = JSON.stringify({ name, colorIdx, moves, finishTimeCs: timeCs });
-    const key    = dailyGhostKey(date);
+    if (!pgPool) return sendJson(res, 200, { ok: true });
     try {
-      await valkey.zadd(key, timeCs, member);
-      // Keep only the fastest DAILY_GHOST_MAX; zremrangebyrank removes by rank
-      // ascending — rank 0 is lowest score (fastest), so remove from the slow end.
-      await valkey.zremrangebyrank(key, DAILY_GHOST_MAX, -1);
-      await valkey.expire(key, DAILY_GHOST_TTL);
+      await pgPool.query(
+        `INSERT INTO daily_ghosts (date, name, color_idx, finish_time_cs, moves)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [date, name, colorIdx, timeCs, JSON.stringify(moves)],
+      );
+      // Prune so only the DAILY_GHOST_MAX fastest rows remain for this date.
+      await pgPool.query(
+        `DELETE FROM daily_ghosts
+         WHERE date = $1
+           AND id NOT IN (
+             SELECT id FROM daily_ghosts
+             WHERE date = $1
+             ORDER BY finish_time_cs ASC
+             LIMIT $2
+           )`,
+        [date, DAILY_GHOST_MAX],
+      );
     } catch (err) {
-      console.error('[valkey] postDailyGhost error:', err.message);
+      console.error('[pg] postDailyGhost error:', err.message);
     }
     sendJson(res, 200, { ok: true });
   });
 }
 
 /** GET /daily-ghost?date=YYYY-MM-DD — returns top DAILY_GHOST_RETURN ghosts
- *  for the given date, sorted fastest first. Returns [] when Valkey is down. */
+ *  for the given date, fastest first. Returns [] when PG is unavailable. */
 async function getDailyGhosts(req, res) {
   const date = new URLSearchParams(req.url.split('?')[1] || '').get('date') || '';
   if (!DAILY_DATE_RE.test(date)) return sendJson(res, 400, { error: 'invalid date' });
-  if (valkey?.status !== 'ready') return sendJson(res, 200, []);
+  if (!pgPool) return sendJson(res, 200, []);
   try {
-    const members = await valkey.zrange(dailyGhostKey(date), 0, DAILY_GHOST_RETURN - 1);
-    const ghosts  = members.map(m => { try { return JSON.parse(m); } catch { return null; } })
-                           .filter(Boolean);
-    sendJson(res, 200, ghosts);
+    const { rows } = await pgPool.query(
+      `SELECT name, color_idx AS "colorIdx", finish_time_cs AS "finishTimeCs", moves
+       FROM daily_ghosts
+       WHERE date = $1
+       ORDER BY finish_time_cs ASC
+       LIMIT $2`,
+      [date, DAILY_GHOST_RETURN],
+    );
+    sendJson(res, 200, rows);
   } catch (err) {
-    console.error('[valkey] getDailyGhosts error:', err.message);
+    console.error('[pg] getDailyGhosts error:', err.message);
     sendJson(res, 200, []);
   }
 }
@@ -1247,6 +1261,37 @@ async function main() {
     console.log(`✓ Valkey connected (${valkeyUrl.split('@').pop()}${tls ? ', TLS' : ''})`);
   } catch (err) {
     console.error('[valkey] connect failed — leaderboard disabled:', err.message);
+  }
+
+  // PostgreSQL — daily challenge ghost persistence. Degrade gracefully when
+  // POSTGRES_URI is unset or the DB is unreachable; ghosts just won't persist.
+  if (POSTGRES_URI) {
+    const pgOpts = { connectionString: POSTGRES_URI };
+    const pgCa = process.env.POSTGRES_CA_CERT;
+    if (pgCa) pgOpts.ssl = { ca: readPem(pgCa) };
+    else if (POSTGRES_URI.includes('sslmode=require') || POSTGRES_URI.includes('sslmode=verify')) {
+      pgOpts.ssl = { rejectUnauthorized: false };
+    }
+    pgPool = new Pool(pgOpts);
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS daily_ghosts (
+          id          SERIAL PRIMARY KEY,
+          date        DATE        NOT NULL,
+          name        TEXT        NOT NULL,
+          color_idx   SMALLINT    NOT NULL DEFAULT 0,
+          finish_time_cs INTEGER  NOT NULL,
+          moves       JSONB       NOT NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS daily_ghosts_date_time
+          ON daily_ghosts (date, finish_time_cs);
+      `);
+      console.log('✓ PostgreSQL connected — daily_ghosts table ready');
+    } catch (err) {
+      console.error('[pg] connect/migrate failed — daily ghosts disabled:', err.message);
+      pgPool = null;
+    }
   }
 
   // Ensure topic exists
