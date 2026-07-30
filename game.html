@@ -174,6 +174,30 @@
   }
   #btn-help-close:hover { color: #d0e8f8; background: none; }
 
+  /* ── Name-entry modal ────────────────────────────────── */
+  #name-modal {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: #060a14e0; z-index: 40;
+    display: flex; justify-content: center; align-items: center;
+    font-family: monospace; color: #c0d8f0; padding: 16px;
+  }
+  #name-modal.hidden { display: none; }
+  #name-inner {
+    background: #0e1828; border: 2px solid #2a5070;
+    max-width: 320px; width: 100%;
+    padding: 24px 24px 20px; text-align: center;
+  }
+  #name-inner h2 {
+    font-size: 20px; color: #e8d030; text-shadow: 0 0 8px #a08000;
+    letter-spacing: 2px; margin-bottom: 8px;
+  }
+  #name-inner p { font-size: 13px; color: #90c0e0; margin-bottom: 14px; }
+  #name-entry-input {
+    width: 100%; box-sizing: border-box; margin-bottom: 12px;
+    font-size: 16px; text-align: center;
+  }
+  #btn-name-go { width: 100%; font-size: 15px; padding: 8px; }
+
   /* ── Result overlay (finish / results) ───────────────── */
   #result-overlay {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -349,6 +373,16 @@
          race before the lobby's join window elapses. -->
     <button id="btn-start" class="hidden">Start Match</button>
     <button id="btn-leave" class="hidden">Leave Room</button>
+  </div>
+</div>
+
+<!-- ── Name-entry modal (shown on first visit when no name is cached) ── -->
+<div id="name-modal" class="hidden">
+  <div id="name-inner">
+    <h2>🦀 CRAB RACING</h2>
+    <p>What's your name, racer?</p>
+    <input id="name-entry-input" placeholder="Enter your name" maxlength="16" autocomplete="off">
+    <button id="btn-name-go">Let's Race!</button>
   </div>
 </div>
 
@@ -896,9 +930,28 @@ refreshLobbyBaselines();
 myColorIdx = loadColorPref();
 buildColorPicker();
 
-// Pre-fill player name from localStorage (blank → input keeps its default "Crab").
+// Pre-fill player name from localStorage. If no name is cached, show the
+// name-entry modal so the player sets one before reaching the lobby.
 const _savedName = loadNamePref();
-if (_savedName) $id('player-name').value = _savedName;
+if (_savedName) {
+  $id('player-name').value = _savedName;
+} else {
+  $id('name-modal').classList.remove('hidden');
+  $id('name-entry-input').focus();
+}
+
+function submitNameModal() {
+  const n = $id('name-entry-input').value.trim();
+  const name = n || 'Crab';
+  saveNamePref(name);
+  $id('player-name').value = name;
+  $id('name-modal').classList.add('hidden');
+}
+
+$id('btn-name-go').onclick = submitNameModal;
+$id('name-entry-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitNameModal();
+});
 
 // Apply lobby overrides to the local track (solo races). Clamps + scales exactly
 // like the server so a solo track matches what a multiplayer room would build.
