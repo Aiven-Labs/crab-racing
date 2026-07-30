@@ -589,6 +589,15 @@ function drawBeach(ctx) {
   rect(ctx, 9, 22, 15, 6, '#3888d0');
   hline(ctx, 9, 23, 24, '#60a8f0');
 }
+// ─── dizzy star sprite (8×8, pixel-art) ────────────────────────────────────────
+function drawDizzyStar(ctx) {
+  px(ctx, 3, 0, '#fff060'); px(ctx, 4, 0, '#fff060');
+  vline(ctx, 3, 1, 2, '#ffe030'); px(ctx, 4, 1, '#ffe030'); px(ctx, 4, 2, '#ffe030');
+  hline(ctx, 0, 7, 3, '#fff060');
+  hline(ctx, 1, 6, 4, '#ffe030');
+  px(ctx, 3, 5, '#ffe030'); px(ctx, 4, 5, '#ffe030');
+  vline(ctx, 3, 6, 7, '#ffc800'); px(ctx, 4, 6, '#ffc800'); px(ctx, 4, 7, '#ffc800');
+}
 function drawNet(ctx) {
   const C = '#b08838';
   for (let x = 4; x <= 28; x += 4) vline(ctx, x, 8, 24, C);
@@ -2324,16 +2333,21 @@ class RaceScene extends Phaser.Scene {
   }
 
   // ── setDizzy ────────────────────────────────────────────────────────────────
-  // Visual feedback for a stunned crab: a wobble tween on the sprite plus an
-  // orbiting "💫" above its head. Shared by solo and multiplayer stun paths so
-  // both look identical. Idempotent — calling with on=true while already dizzy
-  // is a no-op, and on=false always cleans up fully.
+  // Visual feedback for a stunned crab: a wobble tween on the sprite plus a pair
+  // of pixel-art stars (drawDizzyStar) orbiting its head. Shared by solo and
+  // multiplayer stun paths so both look identical. Idempotent — calling with
+  // on=true while already dizzy is a no-op, and on=false always cleans up fully.
   setDizzy(spr, on) {
     if (!spr) return;
     if (on) {
       if (spr._dizzyFx) return;
-      const star = this.add.text(spr.x, spr.y - 20 * RES, '💫', { fontSize: `${14 * RES}px` })
-        .setOrigin(0.5);
+      if (!this.textures.exists('dizzyStar')) {
+        const { canvas, ctx } = makeCanvas(8, 8);
+        drawDizzyStar(ctx);
+        this.textures.addCanvas('dizzyStar', canvas);
+      }
+      const stars = [0, Math.PI].map(offset =>
+        this.add.sprite(spr.x, spr.y - 20 * RES, 'dizzyStar').setScale(RES));
       const wobble = this.tweens.add({
         targets: spr, angle: 12, duration: 90, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
       });
@@ -2341,17 +2355,21 @@ class RaceScene extends Phaser.Scene {
       const orbitTween = this.tweens.add({
         targets: orbit, a: Math.PI * 2, duration: 700, repeat: -1, ease: 'Linear',
         onUpdate: () => {
-          star.setPosition(
-            spr.x + Math.cos(orbit.a) * 10 * RES,
-            spr.y - 20 * RES + Math.sin(orbit.a) * 5 * RES,
-          );
+          stars.forEach((star, i) => {
+            const a = orbit.a + (i === 0 ? 0 : Math.PI);
+            star.setPosition(
+              spr.x + Math.cos(a) * 10 * RES,
+              spr.y - 20 * RES + Math.sin(a) * 5 * RES,
+            );
+            star.setAngle(orbit.a * 180 / Math.PI);
+          });
         },
       });
-      spr._dizzyFx = { star, wobble, orbitTween };
+      spr._dizzyFx = { stars, wobble, orbitTween };
     } else if (spr._dizzyFx) {
       spr._dizzyFx.wobble.stop();
       spr._dizzyFx.orbitTween.stop();
-      spr._dizzyFx.star.destroy();
+      spr._dizzyFx.stars.forEach(s => s.destroy());
       spr.angle = 0;
       delete spr._dizzyFx;
     }
