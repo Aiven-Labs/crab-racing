@@ -5,305 +5,316 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Crab Racing</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #0a0f1e;
-    display: flex; justify-content: center; align-items: center;
-    width: 100vw; height: 100vh; overflow: hidden; touch-action: none;
-  }
 
-  #game-container {
-    position: fixed; inset: 0;
-  }
+@font-face { font-family: 'Funnel Display'; src: url('_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/FunnelDisplay-ExtraBold.ttf') format('truetype'); font-weight: 800; font-display: swap; }
+@font-face { font-family: 'Inter'; src: url('_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/Inter-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Inter'; src: url('_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/Inter-SemiBold.ttf') format('truetype'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Geist Mono'; src: url('_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/GeistMono-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
 
-  /* ── Lobby overlay ─────────────────────────────────── */
-  #lobby {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: #0a0f1e;
-    display: flex; justify-content: center; align-items: center;
-    z-index: 10; font-family: monospace; color: #c0d8f0;
-  }
-  #lobby.hidden { display: none; }
+:root {
+  --brand-bg: #05080F; --brand-bg-elev: #0B0F1A; --brand-bg-card: #11151F;
+  --brand-fg: #FFFFFF; --brand-fg-muted: #9AA1AF;
+  --brand-border: #1F2430; --brand-border-strong: #2B3242;
+  --brand-green: #5FFA74; --brand-blue: #6F64FF; --brand-orange: #FF965E;
+  --brand-purple: #DF56F2; --brand-yellow: #FFE55E; --brand-red: #F85149;
+  --mono: 'Geist Mono', ui-monospace, monospace;
+  --sans: 'Inter', system-ui, sans-serif;
+  --display: 'Funnel Display', 'Inter', sans-serif;
+}
 
-  /* ── Home button (over the game canvas) ────────────── */
-  #btn-home {
-    position: fixed; top: 10px; left: 10px; z-index: 20;
-    background: #111e30; border: 2px solid #2a5070; color: #a0c8e8;
-    font-family: monospace; font-size: 14px; padding: 6px 12px;
-    cursor: pointer; letter-spacing: 1px;
-  }
-  #btn-home:hover { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
-  #btn-home.hidden { display: none; }
-  #lobby-inner {
-    display: flex; flex-direction: column; gap: 12px;
-    max-width: 340px; width: 90%; text-align: center;
-  }
-  #lobby h1   { font-size: 32px; color: #e8d030; text-shadow: 0 0 10px #a08000; letter-spacing: 2px; }
-  #lobby .sub { font-size: 13px; color: #6090a8; letter-spacing: 1px; }
-  #lobby button {
-    background: #111e30; border: 2px solid #2a5070; color: #a0c8e8;
-    font-family: monospace; font-size: 16px; padding: 12px 16px;
-    cursor: pointer; letter-spacing: 1px; width: 100%;
-  }
-  #lobby button:hover { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
-  #lobby input {
-    background: #0e1828; border: 1px solid #1e3850; color: #c0d8f0;
-    font-family: monospace; font-size: 16px; padding: 10px 10px; width: 100%;
-    outline: none;
-  }
-  #lobby input:focus { border-color: #3a7090; }
-  #lobby hr    { border: none; border-top: 1px solid #1e3050; margin: 2px 0; }
-  #lobby-status { font-size: 13px; color: #5898b8; min-height: 16px; }
-  #player-list  { font-size: 13px; min-height: 16px; letter-spacing: 1px; }
-  #multi-section { display: flex; flex-direction: column; gap: 6px; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--brand-bg);
+  display: flex; justify-content: center; align-items: center;
+  width: 100vw; height: 100vh; overflow: hidden; touch-action: none;
+  font-family: var(--sans); color: var(--brand-fg);
+}
+a { color: var(--brand-green); text-decoration: none; }
+a:hover { color: #7CFC8E; text-decoration: underline; }
 
-  /* ── Crab colour carousel ──────────────────────────── */
-  #color-picker { display: flex; gap: 10px; justify-content: center; align-items: center; }
-  #color-picker .cp-arrow {
-    width: auto; padding: 6px 12px; font-size: 18px; line-height: 1;
-    /* inherits #lobby button styling; just size it as an arrow control */
-  }
-  #color-picker .cp-preview {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    min-width: 72px;
-  }
-  #color-picker .cp-crab {
-    width: 48px; height: 48px; image-rendering: pixelated;
-    border: 2px solid #2a5070; background: #0e1828;
-  }
-  #color-picker .cp-name { font-size: 12px; color: #7ea8c8; letter-spacing: 1px; }
-  .lrow { display: flex; gap: 6px; }
-  .lrow input  { flex: 1; }
-  .lrow button { flex: 0 0 auto; width: auto; padding: 6px 12px; }
+#game-container { position: fixed; inset: 0; }
 
-  /* ── Custom seed toggle ───────────────────────────────── */
-  #seed-section { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
-  #seed-section > summary {
-    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
-    padding: 8px 0; list-style: none; user-select: none;
-  }
-  #seed-section > summary::before { content: '# '; }
-  #seed-section[open] > summary { color: #a0c8e8; }
-  #seed-section .seed-body { padding-bottom: 10px; }
+/* ── Lobby ─────────────────────────────────────────── */
+#lobby {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: var(--brand-bg);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 10; font-family: var(--sans); color: var(--brand-fg);
+  overflow-x: hidden; overflow-y: auto; padding: 32px 16px;
+  align-items: flex-start;
+}
+#lobby.hidden { display: none; }
+/* Two decorative programming glyphs, behind content, cropped off the edges. */
+#lobby::before, #lobby::after {
+  content: '{'; position: absolute; font-family: var(--display); font-weight: 800;
+  font-size: 78vh; line-height: 0.7; color: var(--brand-blue); opacity: 0.11;
+  pointer-events: none; z-index: 0;
+}
+#lobby::before { left: -6vw; top: 2vh; }
+#lobby::after  { content: '*'; right: -4vw; bottom: -6vh; color: var(--brand-purple); font-size: 56vh; }
 
-  /* ── Track settings (per-lobby) ────────────────────── */
-  #track-settings { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
-  #track-settings > summary {
-    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
-    padding: 8px 0; list-style: none; user-select: none;
-  }
-  #track-settings > summary::before { content: '⚙ '; }
-  #track-settings[open] > summary { color: #a0c8e8; }
-  #track-settings .ts-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
-  #track-settings label { font-size: 13px; color: #7ea8c8; }
-  .ts-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .ts-field input { width: 90px !important; }
-  #cfg-obstacles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
-  #cfg-obstacles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-  #cfg-obstacles input { width: auto !important; }
+#lobby-inner {
+  position: relative; z-index: 1; margin: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  max-width: 380px; width: 100%; text-align: center;
+}
+#lobby-logo { width: 132px; align-self: center; display: block; margin-bottom: 4px; }
+#lobby h1 {
+  font-family: var(--display); font-weight: 800; text-transform: uppercase;
+  font-size: 46px; line-height: 0.92; letter-spacing: -0.01em; color: var(--brand-fg);
+}
+#lobby .sub {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-green);
+}
 
+/* Brand pills */
+.pill, #btn-home, #result-panel button {
+  font-family: var(--sans); font-weight: 600; font-size: 15px; line-height: 1.2;
+  border-radius: 9999px; padding: 12px 20px; cursor: pointer; width: 100%;
+  background: transparent; border: 1px solid var(--brand-border-strong);
+  color: var(--brand-fg);
+  transition: background 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+}
+.pill:hover, #btn-home:hover, #result-panel button:hover {
+  background: rgba(255,255,255,0.08); border-color: var(--brand-fg);
+}
+.pill:focus-visible, .field:focus-visible, #result-panel button:focus-visible,
+#btn-home:focus-visible, summary:focus-visible {
+  outline: 3px solid rgba(95,250,116,0.25); outline-offset: 2px;
+}
+#btn-solo, #btn-name-go, #result-panel button.primary {
+  background: var(--brand-green); border-color: var(--brand-green); color: #05080F;
+}
+#btn-solo:hover, #btn-name-go:hover, #result-panel button.primary:hover {
+  background: #7CFC8E; border-color: #7CFC8E; color: #05080F;
+}
+#btn-solo:active, #btn-name-go:active, #result-panel button.primary:active { transform: translateY(1px); }
+#btn-daily, #btn-multi { border: 2px solid var(--brand-fg); }
 
-  /* ── Room browser ─────────────────────────────────── */
-  #room-browser { text-align: left; border: 1px solid #1e3050; padding: 0 10px; }
-  #room-browser > summary {
-    cursor: pointer; color: #6090a8; font-size: 13px; letter-spacing: 1px;
-    padding: 8px 0; list-style: none; user-select: none;
-  }
-  #room-browser > summary::before { content: '⊞ '; }
-  #room-browser[open] > summary { color: #a0c8e8; }
-  #room-browser-body { padding-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
-  #room-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-height: 18px; }
-  .room-entry {
-    display: flex; align-items: center; justify-content: space-between;
-    background: #0e1828; border: 1px solid #1e3050; padding: 5px 8px;
-    cursor: pointer; gap: 8px;
-  }
-  .room-entry:hover { border-color: #3a7090; background: #14202e; }
-  .room-entry .re-id   { color: #d0e8f8; font-weight: bold; }
-  .room-entry .re-meta { color: #5898b8; font-size: 12px; }
-  #room-list-status { font-size: 12px; color: #486880; min-height: 14px; }
-  #btn-refresh-rooms { font-size: 13px; padding: 6px 10px; }
-  #solo-autoclose-notice {
-    font-size: 12px; color: #c09830; min-height: 14px; text-align: center; letter-spacing: 1px;
-  }
+.field {
+  background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
+  color: var(--brand-fg); font-family: var(--sans); font-size: 15px;
+  padding: 11px 12px; width: 100%; outline: none; border-radius: 6px;
+}
+.field::placeholder { color: var(--brand-fg-muted); }
+.field:focus { border-color: var(--brand-green); }
+#lobby hr { border: none; border-top: 1px solid var(--brand-border); margin: 4px 0; }
+#lobby-status {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+  color: var(--brand-fg-muted); min-height: 16px;
+}
+#player-list { font-family: var(--mono); font-size: 13px; min-height: 16px; }
+#multi-section { display: flex; flex-direction: column; gap: 8px; }
 
-  /* ── How-to-play modal ─────────────────────────────── */
-  #btn-help { margin-top: 2px; }
-  #help-modal {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: #060a14e0; z-index: 30;
-    display: flex; justify-content: center; align-items: center;
-    font-family: monospace; color: #c0d8f0; padding: 16px;
-  }
-  #help-modal.hidden { display: none; }
-  #help-inner {
-    background: #0e1828; border: 2px solid #2a5070;
-    max-width: 380px; width: 100%; max-height: 88vh; overflow-y: auto;
-    padding: 18px 20px; position: relative;
-  }
-  #help-inner h2 {
-    font-size: 20px; color: #e8d030; text-shadow: 0 0 8px #a08000;
-    letter-spacing: 2px; margin-bottom: 4px; text-align: center;
-  }
-  #help-inner h3 {
-    font-size: 13px; color: #7ec8e3; letter-spacing: 1px;
-    text-transform: uppercase; margin: 16px 0 6px;
-  }
-  #help-inner p, #help-inner li { font-size: 13px; line-height: 1.5; color: #b0c8e0; }
-  #help-inner .goal { color: #90d090; }
-  #help-keys { list-style: none; }
-  #help-keys li { display: flex; gap: 8px; padding: 2px 0; }
-  #help-keys kbd {
-    flex: 0 0 auto; min-width: 88px;
-    background: #16283c; border: 1px solid #2a5070; border-radius: 3px;
-    padding: 1px 6px; color: #d0e8f8; font-size: 12px; text-align: center;
-  }
-  #help-obstacles { list-style: none; display: flex; flex-direction: column; gap: 8px; }
-  #help-obstacles li { display: flex; align-items: center; gap: 10px; }
-  #help-obstacles canvas {
-    flex: 0 0 auto; width: 40px; height: 40px;
-    image-rendering: pixelated; background: #0a1220; border: 1px solid #1e3050;
-  }
-  #help-obstacles .ob-desc { flex: 1; }
-  #help-obstacles .ob-name { color: #e0c870; font-size: 13px; }
-  #help-obstacles .ob-pen  { color: #d09080; font-size: 12px; }
-  #btn-help-close {
-    position: absolute; top: 8px; right: 10px; width: auto;
-    background: none; border: none; color: #6090a8; font-size: 20px;
-    cursor: pointer; padding: 0 4px; line-height: 1;
-  }
-  #btn-help-close:hover { color: #d0e8f8; background: none; }
+/* ── Home button over the canvas ───────────────────── */
+#btn-home {
+  position: fixed; top: 12px; left: 12px; z-index: 20; width: auto;
+  padding: 8px 16px; font-size: 13px;
+  background: rgba(5,8,15,0.85); backdrop-filter: blur(12px);
+}
+#btn-home.hidden { display: none; }
 
-  /* ── Name-entry modal ────────────────────────────────── */
-  #name-modal {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: #060a14e0; z-index: 40;
-    display: flex; justify-content: center; align-items: center;
-    font-family: monospace; color: #c0d8f0; padding: 16px;
-  }
-  #name-modal.hidden { display: none; }
-  #name-inner {
-    background: #0e1828; border: 2px solid #2a5070;
-    max-width: 320px; width: 100%;
-    padding: 24px 24px 20px; text-align: center;
-  }
-  #name-inner h2 {
-    font-size: 20px; color: #e8d030; text-shadow: 0 0 8px #a08000;
-    letter-spacing: 2px; margin-bottom: 8px;
-  }
-  #name-inner p { font-size: 13px; color: #90c0e0; margin-bottom: 14px; }
-  #name-entry-input {
-    width: 100%; box-sizing: border-box; margin-bottom: 12px;
-    font-size: 16px; text-align: center;
-  }
-  #btn-name-go { width: 100%; font-size: 15px; padding: 8px; }
+/* ── Crab colour carousel ──────────────────────────── */
+#color-picker { display: flex; gap: 12px; justify-content: center; align-items: center; }
+#color-picker .cp-arrow { width: auto; padding: 8px 14px; font-size: 16px; flex: 0 0 auto; }
+#color-picker .cp-preview {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 84px;
+}
+#color-picker .cp-crab {
+  width: 48px; height: 48px; image-rendering: pixelated;
+  border: 1px solid var(--brand-border); background: var(--brand-bg-elev); border-radius: 6px;
+}
+#color-picker .cp-name {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-fg-muted);
+}
+.lrow { display: flex; gap: 8px; }
+.lrow input { flex: 1; }
+.lrow button { flex: 0 0 auto; width: auto; padding: 11px 20px; }
 
-  /* ── Result overlay (finish / results) ───────────────── */
-  #result-overlay {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    z-index: 22; display: flex; justify-content: center; align-items: center;
-    pointer-events: none; font-family: monospace; padding: 16px;
-  }
-  #result-overlay.hidden { display: none; }
-  #result-panel {
-    pointer-events: auto;
-    background: linear-gradient(160deg, #0e1828 0%, #0a1220 100%);
-    border: 2px solid #2a5070;
-    box-shadow: 0 12px 40px -8px #000c, 0 0 24px -6px #1a4a70a0;
-    padding: 28px 30px; width: 100%; max-width: 380px; text-align: center;
-    animation: result-in .28s cubic-bezier(.2,.8,.2,1);
-  }
-  @keyframes result-in {
-    from { opacity: 0; transform: scale(.92) translateY(8px); }
-    to   { opacity: 1; transform: scale(1) translateY(0); }
-  }
-  #result-panel h2 {
-    font-size: 30px; letter-spacing: 2px; color: #e8d030;
-    text-shadow: 0 0 10px #a08000; margin-bottom: 8px;
-    white-space: nowrap; overflow: hidden;
-    display: flex; justify-content: center; align-items: center; gap: 6px;
-  }
-  #result-panel h2 .h2-text {
-    font-size: clamp(14px, 7.5vw, 30px); letter-spacing: 1px;
-  }
-  #result-panel .r-time { font-size: 19px; color: #fff; margin: 10px 0 4px; }
-  #result-panel .r-vs   { font-size: 15px; margin-bottom: 6px; }
-  #result-panel .r-vs.good { color: #90d090; }
-  #result-panel .r-vs.bad  { color: #e0a060; }
-  #result-panel .r-vs.even { color: #e8e030; }
-  #result-panel .r-hint {
-    font-size: 13px; color: #7ec8e3; margin-top: 14px; letter-spacing: .5px;
-  }
-  #result-panel .r-actions {
-    display: flex; flex-direction: column; gap: 8px; margin-top: 16px;
-  }
-  #result-panel button {
-    font-family: monospace; font-size: 16px; letter-spacing: .5px;
-    padding: 12px 16px; cursor: pointer;
-    background: #16283c; border: 1px solid #2a5070; color: #a0c8e8;
-  }
-  #result-panel button:hover  { background: #1a2e48; border-color: #4a90c0; color: #d0e8f8; }
-  #result-panel button.primary { border-color: #3a8050; color: #90d090; }
-  #result-panel button.primary:hover { background: #16321f; border-color: #50b070; }
-  #result-panel button.danger  { color: #c08060; }
-  #result-panel button.danger:hover  { background: #2a1810; border-color: #a05838; }
-  #result-panel button.copied  { color: #90d090; border-color: #3a8050; }
+/* ── Collapsible panels ────────────────────────────── */
+#seed-section, #track-settings, #room-browser {
+  text-align: left; background: var(--brand-bg-card);
+  border: 1px solid var(--brand-border); border-radius: 12px; padding: 0 14px;
+}
+#seed-section > summary, #track-settings > summary, #room-browser > summary {
+  cursor: pointer; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-fg-muted);
+  padding: 12px 0; list-style: none; user-select: none;
+}
+#seed-section[open] > summary, #track-settings[open] > summary, #room-browser[open] > summary {
+  color: var(--brand-green);
+}
+#seed-section > summary::before  { content: '# ';  color: var(--brand-green); }
+#track-settings > summary::before { content: '= '; color: var(--brand-green); }
+#room-browser > summary::before   { content: '* '; color: var(--brand-green); }
+#seed-section .seed-body { padding-bottom: 14px; }
+#track-settings .ts-body { display: flex; flex-direction: column; gap: 10px; padding-bottom: 14px; }
+#track-settings label { font-family: var(--sans); font-size: 13px; color: var(--brand-fg-muted); }
+.ts-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ts-field input.field { width: 96px; flex: 0 0 auto; }
+#cfg-obstacles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+#cfg-obstacles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#cfg-obstacles input { width: auto; accent-color: var(--brand-green); }
 
-  #result-rows {
-    display: flex; flex-direction: column; gap: 5px; margin: 16px 0; text-align: left;
-  }
+/* ── Room browser ──────────────────────────────────── */
+#room-browser-body { padding-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+#room-list { display: flex; flex-direction: column; gap: 6px; min-height: 18px; }
+.room-entry {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
+  border-radius: 6px; padding: 8px 10px; cursor: pointer; gap: 8px;
+  transition: border-color 150ms ease-out;
+}
+.room-entry:hover { border-color: var(--brand-green); }
+.room-entry .re-id { font-family: var(--mono); font-size: 13px; color: var(--brand-fg); }
+.room-entry .re-meta { font-size: 12px; color: var(--brand-fg-muted); }
+#room-list-status { font-family: var(--mono); font-size: 11px; color: var(--brand-fg-muted); min-height: 14px; }
+#btn-refresh-rooms { font-size: 13px; padding: 9px 16px; }
+#solo-autoclose-notice {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  color: var(--brand-orange); min-height: 14px; text-align: center;
+}
 
-  /* ── Per-seed leaderboard ──────────────────────────────────── */
-  .r-lb { margin: 14px 0 4px; text-align: left; }
-  .r-lb-title {
-    font-size: 12px; letter-spacing: 1px; color: #7ec8e3;
-    text-transform: uppercase; margin-bottom: 6px; padding: 0 2px;
-  }
-  .r-lb-row {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 13px; padding: 4px 8px; border-left: 3px solid transparent;
-  }
-  .r-lb-row.lb-me { background: #16283c; }
-  .r-lb-row .lb-rank  { flex: 0 0 28px; font-weight: bold; color: #a0c8e8; }
-  .r-lb-row .lb-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .r-lb-row .lb-time  { flex: 0 0 auto; color: #c0d8f0; }
-  .r-lb-row.lb-1 { border-left-color: #e8d030; }
-  .r-lb-row.lb-2 { border-left-color: #b8c4d0; }
-  .r-lb-row.lb-3 { border-left-color: #c88040; }
-  .r-lb-empty { font-size: 12px; color: #506080; padding: 4px 8px; }
-  .r-lb-sep   { font-size: 12px; color: #506080; padding: 2px 8px; letter-spacing: 2px; }
-  .r-row {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 15px; padding: 6px 10px; border-left: 3px solid transparent;
-  }
+/* ── Modals ────────────────────────────────────────── */
+#help-modal, #name-modal {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgba(5,8,15,0.85); backdrop-filter: blur(12px);
+  display: flex; justify-content: center; align-items: center;
+  font-family: var(--sans); color: var(--brand-fg); padding: 16px;
+}
+#name-modal { z-index: 40; }
+#help-modal.hidden, #name-modal.hidden { display: none; }
+#help-inner, #name-inner {
+  background: var(--brand-bg-card); border: 1px solid var(--brand-border);
+  border-radius: 12px; max-width: 420px; width: 100%; position: relative;
+}
+#help-inner { max-height: 88vh; overflow-y: auto; padding: 28px 28px 24px; }
+#name-inner { max-width: 360px; padding: 32px 28px 26px; text-align: center; }
+#help-inner h2, #name-inner h2 {
+  font-family: var(--display); font-weight: 800; text-transform: uppercase;
+  font-size: 30px; line-height: 0.92; letter-spacing: -0.01em;
+  color: var(--brand-fg); margin-bottom: 12px;
+}
+#name-inner h2 { font-size: 34px; }
+#help-inner h3 {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-green); margin: 22px 0 8px;
+}
+#help-inner p, #help-inner li { font-size: 14px; line-height: 1.5; color: var(--brand-fg-muted); text-wrap: pretty; }
+#help-inner .goal { color: var(--brand-fg-muted); }
+#help-inner .goal strong { color: var(--brand-fg); font-weight: 600; }
+#name-inner p { font-size: 14px; color: var(--brand-fg-muted); margin-bottom: 18px; }
+#name-entry-input { margin-bottom: 14px; text-align: center; }
+#name-inner .pill { width: 100%; }
+#btn-name-go { margin-top: 2px; }
+#help-keys { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+#help-keys li { display: flex; gap: 10px; align-items: center; }
+#help-keys kbd {
+  flex: 0 0 auto; min-width: 100px; font-family: var(--mono); font-size: 11px;
+  background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
+  border-radius: 4px; padding: 3px 8px; color: var(--brand-fg); text-align: center;
+}
+#help-obstacles { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+#help-obstacles li { display: flex; align-items: center; gap: 12px; }
+#help-obstacles canvas {
+  flex: 0 0 auto; width: 40px; height: 40px; image-rendering: pixelated;
+  background: var(--brand-bg-elev); border: 1px solid var(--brand-border); border-radius: 4px;
+}
+#help-obstacles .ob-desc { flex: 1; }
+#help-obstacles .ob-name { font-family: var(--sans); font-weight: 600; font-size: 14px; color: var(--brand-fg); }
+#help-obstacles .ob-pen { font-family: var(--mono); font-size: 11px; color: var(--brand-fg-muted); }
+#btn-help-close {
+  position: absolute; top: 14px; right: 16px; width: auto;
+  background: none; border: none; color: var(--brand-fg-muted); font-size: 18px;
+  cursor: pointer; padding: 4px; line-height: 1; border-radius: 4px;
+}
+#btn-help-close:hover { color: var(--brand-fg); background: none; }
 
-  /* ── Solo stats table ─────────────────────────────────── */
-  .r-stats {
-    margin: 10px 0 6px;
-    border: 1px solid #1e3050; border-radius: 2px;
-    font-size: 13px;
-  }
-  .r-stats-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 4px 10px; border-bottom: 1px solid #1a2a40;
-  }
-  .r-stats-row:last-child { border-bottom: none; }
-  .r-stats-row .rs-label {
-    display: flex; align-items: center; gap: 7px; color: #7ec8e3;
-  }
-  .r-stats-row .rs-label img {
-    width: 20px; height: 20px; image-rendering: pixelated;
-  }
-  .r-stats-row .rs-val   { color: #e0e8f8; font-weight: bold; }
-  .r-row.me       { background: #16283c; }
-  .r-row .r-rank  { flex: 0 0 38px; font-weight: bold; color: #a0c8e8; }
-  .r-row .r-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .r-row .r-rtime { flex: 0 0 auto; color: #c0d8f0; }
-  .r-row.dnf      { color: #888; }
-  .r-row.dnf .r-rank, .r-row.dnf .r-rtime { color: #888; }
-  .r-row.place-1  { border-left-color: #e8d030; }
-  .r-row.place-2  { border-left-color: #b8c4d0; }
-  .r-row.place-3  { border-left-color: #c88040; }
+/* ── Result overlay ────────────────────────────────── */
+#result-overlay {
+  position: fixed; inset: 0; z-index: 22;
+  display: flex; justify-content: center; align-items: center;
+  pointer-events: none; font-family: var(--sans); padding: 16px;
+}
+#result-overlay.hidden { display: none; }
+#result-panel {
+  pointer-events: auto; background: var(--brand-bg-card);
+  border: 1px solid var(--brand-border); border-radius: 12px;
+  padding: 32px 32px 28px; width: 100%; max-width: 420px; text-align: center;
+  animation: result-in .16s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes result-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+#result-panel h2 {
+  font-family: var(--display); font-weight: 800; text-transform: uppercase;
+  letter-spacing: -0.01em; line-height: 0.92; color: var(--brand-fg); margin-bottom: 10px;
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  white-space: nowrap; overflow: hidden;
+}
+#result-panel h2 .h2-text { font-size: clamp(22px, 8vw, 38px); }
+#result-panel .r-time {
+  font-family: var(--mono); font-size: 22px; color: var(--brand-green); margin: 12px 0 4px;
+}
+#result-panel .r-vs { font-family: var(--mono); font-size: 13px; margin-bottom: 6px; }
+#result-panel .r-vs.good { color: var(--brand-green); }
+#result-panel .r-vs.bad  { color: var(--brand-orange); }
+#result-panel .r-vs.even { color: var(--brand-yellow); }
+#result-panel .r-hint {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--brand-fg-muted); margin-top: 18px;
+}
+#result-panel .r-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
+#result-panel button.danger { color: var(--brand-red); border-color: var(--brand-border-strong); }
+#result-panel button.danger:hover { border-color: var(--brand-red); background: rgba(248,81,73,0.1); }
+#result-panel button.copied { color: var(--brand-green); border-color: var(--brand-green); }
+#result-rows { display: flex; flex-direction: column; gap: 6px; margin: 18px 0; text-align: left; }
+
+/* ── Leaderboards / result rows ────────────────────── */
+.r-lb { margin: 18px 0 4px; text-align: left; }
+.r-lb-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-green); margin-bottom: 8px; padding: 0 2px;
+}
+.r-lb-row {
+  display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px;
+  padding: 6px 10px; border-left: 3px solid transparent; background: var(--brand-bg-elev);
+}
+.r-lb-row.lb-me { background: var(--brand-border); }
+.r-lb-row .lb-rank { flex: 0 0 24px; color: var(--brand-fg-muted); }
+.r-lb-row .lb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-lb-row .lb-time { flex: 0 0 auto; color: var(--brand-fg); }
+.r-lb-row.lb-1 { border-left-color: var(--brand-green); }
+.r-lb-row.lb-2 { border-left-color: var(--brand-fg); }
+.r-lb-row.lb-3 { border-left-color: var(--brand-orange); }
+.r-lb-empty, .r-lb-sep { font-family: var(--mono); font-size: 11px; color: var(--brand-fg-muted); padding: 4px 10px; }
+.r-row {
+  display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 14px;
+  padding: 9px 12px; border-left: 3px solid transparent; background: var(--brand-bg-elev);
+}
+.r-row.me { background: var(--brand-border); }
+.r-row .r-rank { flex: 0 0 38px; color: var(--brand-fg-muted); }
+.r-row .r-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-row .r-rtime { flex: 0 0 auto; color: var(--brand-fg); }
+.r-row.dnf, .r-row.dnf .r-rank, .r-row.dnf .r-rtime { color: #5A6070; }
+.r-row.place-1 { border-left-color: var(--brand-green); }
+.r-row.place-2 { border-left-color: var(--brand-fg); }
+.r-row.place-3 { border-left-color: var(--brand-orange); }
+
+/* ── Solo stats table ──────────────────────────────── */
+.r-stats {
+  margin: 14px 0 6px; border: 1px solid var(--brand-border); border-radius: 6px;
+  overflow: hidden; font-family: var(--mono); font-size: 12px;
+}
+.r-stats-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--brand-border);
+}
+.r-stats-row:last-child { border-bottom: none; }
+.r-stats-row .rs-label { display: flex; align-items: center; gap: 8px; color: var(--brand-fg-muted); }
+.r-stats-row .rs-label img { width: 20px; height: 20px; image-rendering: pixelated; }
+.r-stats-row .rs-val { color: var(--brand-fg); }
+
 </style>
 </head>
 <body>
@@ -311,7 +322,7 @@
 
 <!-- Persistent "home" button — shown only while a race or replay is on screen,
      so the player can always bail back to the lobby. -->
-<button id="btn-home" class="hidden" title="Back to lobby">🏠 Home</button>
+<button id="btn-home" class="hidden" title="Back to lobby">Home</button>
 
 <!-- ── Result overlay: solo finish screen and multiplayer results ─── -->
 <div id="result-overlay" class="hidden">
@@ -321,15 +332,16 @@
 <!-- ── Lobby ─────────────────────────────────────────── -->
 <div id="lobby">
   <div id="lobby-inner">
-    <h1>🦀 CRAB RACING</h1>
-    <div class="sub">COASTAL SURVIVAL RACE</div>
-    <button id="btn-help">❓ How to Play</button>
+    <img id="lobby-logo" src="assets/aiven-logo-white.svg" alt="Aiven">
+    <h1>Crab Racing</h1>
+    <div class="sub">// Coastal survival race</div>
+    <button class="pill" id="btn-help">How to play</button>
     <!-- Pick your crab colour (solo). Swatches are built by buildColorPicker(). -->
     <div id="color-picker" title="Choose your crab"></div>
     <details id="seed-section">
       <summary>Use custom seed</summary>
       <div class="seed-body">
-        <input id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+        <input class="field" id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
       </div>
     </details>
     <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
@@ -339,18 +351,18 @@
       <div class="ts-body">
         <div class="ts-field">
           <label for="cfg-lanes">Lanes</label>
-          <input id="cfg-lanes" type="number" min="1" max="12" placeholder="3">
+          <input class="field" id="cfg-lanes" type="number" min="1" max="12" placeholder="3">
         </div>
         <div class="ts-field">
           <label for="cfg-length">Track length</label>
-          <input id="cfg-length" type="number" min="10" max="200" placeholder="46">
+          <input class="field" id="cfg-length" type="number" min="10" max="200" placeholder="46">
         </div>
         <label>Obstacles</label>
         <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
       </div>
     </details>
-    <button id="btn-solo">Solo Race</button>
-    <button id="btn-daily">⭐ Daily Challenge</button>
+    <button class="pill" id="btn-solo">Solo Race</button>
+    <button class="pill" id="btn-daily">Daily challenge</button>
     <hr>
     <!-- Browse active public rooms. Fetches GET /rooms; clicking a row fills in
          the room code. Refresh button reloads the list. -->
@@ -359,15 +371,15 @@
       <div id="room-browser-body">
         <div id="room-list-status">Loading rooms…</div>
         <div id="room-list"></div>
-        <button id="btn-refresh-rooms">↺ Refresh</button>
+        <button class="pill" id="btn-refresh-rooms">Refresh</button>
       </div>
     </details>
     <div id="multi-section">
-      <input id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
-      <input id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
+      <input class="field" id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
+      <input class="field" id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
       <div class="lrow">
-        <input id="ws-url" placeholder="Server (blank = this site)">
-        <button id="btn-multi">Join</button>
+        <input class="field" id="ws-url" placeholder="Server (blank = this site)">
+        <button class="pill" id="btn-multi">Join</button>
       </div>
     </div>
     <div id="lobby-status">Enter a name &amp; room, then Join</div>
@@ -377,18 +389,18 @@
     <div id="player-list"></div>
     <!-- Shown to the lobby host once 2+ players are in, so they can start the
          race before the lobby's join window elapses. -->
-    <button id="btn-start" class="hidden">Start Match</button>
-    <button id="btn-leave" class="hidden">Leave Room</button>
+    <button id="btn-start" class="pill hidden">Start Match</button>
+    <button id="btn-leave" class="pill hidden">Leave Room</button>
   </div>
 </div>
 
 <!-- ── Name-entry modal (shown on first visit when no name is cached) ── -->
 <div id="name-modal" class="hidden">
   <div id="name-inner">
-    <h2>🦀 CRAB RACING</h2>
+    <h2>Crab Racing</h2>
     <p>What's your name, racer?</p>
-    <input id="name-entry-input" placeholder="Enter your name" maxlength="16" autocomplete="off">
-    <button id="btn-name-go">Let's Race!</button>
+    <input class="field" id="name-entry-input" placeholder="Enter your name" maxlength="16" autocomplete="off">
+    <button class="pill" id="btn-name-go">Let's race</button>
   </div>
 </div>
 
@@ -396,7 +408,7 @@
 <div id="help-modal" class="hidden">
   <div id="help-inner">
     <button id="btn-help-close" title="Close">✕</button>
-    <h2>🦀 How to Play</h2>
+    <h2>How to play</h2>
     <p class="goal">Scuttle your crab from the shoreline all the way to the
       checkered finish line. Reach it as fast as you can — the clock is running.
       In a multiplayer room the race keeps going after the first finish: once one
@@ -469,12 +481,12 @@ const MAX_RECONNECT_ATTEMPTS = 7;   // 7 × 2 s ≈ 14 s — matches server grac
 const RECONNECT_INTERVAL_MS  = 2000;
 
 const CRAB_PALETTES = [
-  ['#4a80a0', '#68a0c0', '#3870a0', '#90c0d8'], // 0 blue (default)
-  ['#a04030', '#c06050', '#903020', '#d09080'], // 1 red
-  ['#408030', '#60a050', '#307020', '#80c070'], // 2 green
-  ['#804090', '#a060b0', '#703080', '#c090d0'], // 3 purple
+  ['#3FCB55', '#5FFA74', '#2A9A3D', '#A6FFB2'], // 0 Aiven Green (default)
+  ['#4C43D6', '#6F64FF', '#382FA8', '#B0AAFF'], // 1 Deep Blue
+  ['#D96F38', '#FF965E', '#A64F22', '#FFC3A0'], // 2 Orange
+  ['#B33CC4', '#DF56F2', '#8A2A98', '#F0A6FA'], // 3 Purple
 ];
-const PALETTE_HEX = ['#68a0c0', '#c06050', '#60a050', '#a060b0'];
+const PALETTE_HEX = ['#5FFA74', '#6F64FF', '#FF965E', '#DF56F2'];
 
 // ─── pixel art helpers ─────────────────────────────────────────────────────────
 function px(ctx,x,y,c)         { ctx.fillStyle=c; ctx.fillRect(x,y,1,1); }
@@ -498,35 +510,35 @@ function makeCanvas(w,h) {
 
 // ─── terrain tile generators (32×32) ──────────────────────────────────────────
 function drawShore(ctx) {
-  rect(ctx,0,0,32,32,'#d4c898');
-  for (let i=0; i<32; i+=4) hline(ctx,0,31,i,'#c8bc88');
-  rect(ctx,0,27,32,5,'#6898b8');
-  hline(ctx,3,28,28,'#88b8d0');
+  rect(ctx,0,0,32,32,'#0B0F1A');
+  for (let i=0; i<32; i+=4) hline(ctx,0,31,i,'#11151F');
+  rect(ctx,0,27,32,5,'#1B4C56');
+  hline(ctx,3,28,28,'#2ED0CD');
 }
 function drawWetSand(ctx) {
-  rect(ctx,0,0,32,32,'#b89a58');
-  for (let y=0; y<32; y+=5) hline(ctx,2,29,y,'#a88848');
-  ellipse(ctx,18,20,7,4,'#6888a8');
+  rect(ctx,0,0,32,32,'#11151F');
+  for (let y=0; y<32; y+=5) hline(ctx,2,29,y,'#0B0F1A');
+  ellipse(ctx,18,20,7,4,'#1B4C56');
 }
 function drawDrySand(ctx) {
-  rect(ctx,0,0,32,32,'#e0c870');
-  px(ctx,7,7,'#c8a858'); px(ctx,19,17,'#c8a858');
-  px(ctx,13,25,'#c8a858'); px(ctx,25,5,'#c8a858');
+  rect(ctx,0,0,32,32,'#1F2430');
+  px(ctx,7,7,'#2B3242'); px(ctx,19,17,'#2B3242');
+  px(ctx,13,25,'#2B3242'); px(ctx,25,5,'#2B3242');
 }
 function drawUndergrowth(ctx) {
-  rect(ctx,0,0,32,32,'#587038');
-  circle(ctx,7,8,4,'#78a040'); circle(ctx,24,20,5,'#689038');
-  circle(ctx,18,7,3,'#88b048'); circle(ctx,5,24,4,'#78a040');
+  rect(ctx,0,0,32,32,'#132A1B');
+  circle(ctx,7,8,4,'#1F4A2A'); circle(ctx,24,20,5,'#1A3D24');
+  circle(ctx,18,7,3,'#2A6435'); circle(ctx,5,24,4,'#1F4A2A');
 }
 function drawTreeline(ctx) {
-  rect(ctx,0,0,32,32,'#2a3020');
-  circle(ctx,9,10,7,'#384828'); circle(ctx,23,22,7,'#304020');
-  circle(ctx,25,8,5,'#405830'); circle(ctx,5,23,5,'#384828');
+  rect(ctx,0,0,32,32,'#0A1610');
+  circle(ctx,9,10,7,'#122318'); circle(ctx,23,22,7,'#0E1D14');
+  circle(ctx,25,8,5,'#1A3322'); circle(ctx,5,23,5,'#122318');
 }
 function drawFinish(ctx) {
   for (let y=0; y<32; y++)
     for (let x=0; x<32; x++)
-      px(ctx,x,y, ((Math.floor(x/4)+Math.floor(y/4))%2===0) ? '#f0f0e0' : '#202020');
+      px(ctx,x,y, ((Math.floor(x/4)+Math.floor(y/4))%2===0) ? '#FFFFFF' : '#05080F');
 }
 
 // ─── spider crab sprite sheet (128×32, 4 walk frames) ─────────────────────────
@@ -550,8 +562,8 @@ function makeCrabSheet(palette) {
     }
     ellipse(ctx, ox+16, 16, 6, 10, BODY);
     ellipse(ctx, ox+15, 14,  4,  7, BODYH);
-    px(ctx, ox+21, 11, '#f0f0f0'); px(ctx, ox+22, 11, '#202020');
-    px(ctx, ox+21, 21, '#f0f0f0'); px(ctx, ox+22, 21, '#202020');
+    px(ctx, ox+21, 11, '#FFFFFF'); px(ctx, ox+22, 11, '#05080F');
+    px(ctx, ox+21, 21, '#FFFFFF'); px(ctx, ox+22, 21, '#05080F');
     hline(ctx, ox+11, ox+21, 3,  LEG);
     hline(ctx, ox+12, ox+20, 4,  BODY);
     hline(ctx, ox+11, ox+21, 5,  LEG);
@@ -564,52 +576,52 @@ function makeCrabSheet(palette) {
 
 // ─── obstacle sprite generators (32×32) ───────────────────────────────────────
 function drawRock(ctx) {
-  ellipse(ctx, 19, 20, 12, 9, '#706858');
-  ellipse(ctx, 13, 16,  8, 6, '#908878');
-  px(ctx, 11, 14, '#b8b0a0'); px(ctx, 12, 13, '#b8b0a0');
+  ellipse(ctx, 19, 20, 12, 9, '#2B3242');
+  ellipse(ctx, 13, 16,  8, 6, '#3D4657');
+  px(ctx, 11, 14, '#5A6373'); px(ctx, 12, 13, '#5A6373');
 }
 function drawHole(ctx) {
-  circle(ctx, 16, 18, 11, '#3a2810');
-  circle(ctx, 16, 18,  8, '#1e1408');
-  circle(ctx, 16, 18,  4, '#080400');
+  circle(ctx, 16, 18, 11, '#1F2430');
+  circle(ctx, 16, 18,  8, '#0B0F1A');
+  circle(ctx, 16, 18,  4, '#05080F');
   for (let a = 200; a <= 340; a += 25) {
     const r = a * Math.PI / 180;
-    px(ctx, Math.round(16 + 11*Math.cos(r)), Math.round(18 + 11*Math.sin(r)), '#604828');
+    px(ctx, Math.round(16 + 11*Math.cos(r)), Math.round(18 + 11*Math.sin(r)), '#2B3242');
   }
 }
 function drawJelly(ctx) {
-  ellipse(ctx, 16, 13, 10, 7, '#c050b8');
-  ellipse(ctx, 16, 11,  6, 4, '#e890d8');
+  ellipse(ctx, 16, 13, 10, 7, '#B33CC4');
+  ellipse(ctx, 16, 11,  6, 4, '#F0A6FA');
   for (let i = 0; i < 5; i++) {
     const x = 8 + i * 4;
     const len = 6 + (i % 2) * 3;
-    vline(ctx, x, 20, 20 + len, '#a040a0');
-    px(ctx, x, 20 + len, '#e070d0');
+    vline(ctx, x, 20, 20 + len, '#8A2A98');
+    px(ctx, x, 20 + len, '#DF56F2');
   }
 }
 function drawBeach(ctx) {
-  vline(ctx, 16, 9, 26, '#c09060');
+  vline(ctx, 16, 9, 26, '#9AA1AF');
   for (let r = 0; r <= 8; r++)
-    hline(ctx, 16-r, 16+r, 9+r, r%2===0 ? '#e02828' : '#f0f0f0');
-  rect(ctx, 9, 22, 15, 6, '#3888d0');
-  hline(ctx, 9, 23, 24, '#60a8f0');
+    hline(ctx, 16-r, 16+r, 9+r, r%2===0 ? '#F85149' : '#FFFFFF');
+  rect(ctx, 9, 22, 15, 6, '#4C43D6');
+  hline(ctx, 9, 23, 24, '#6F64FF');
 }
 // ─── dizzy star sprite (8×8, pixel-art) ────────────────────────────────────────
 function drawDizzyStar(ctx) {
-  px(ctx, 3, 0, '#fff060'); px(ctx, 4, 0, '#fff060');
-  vline(ctx, 3, 1, 2, '#ffe030'); px(ctx, 4, 1, '#ffe030'); px(ctx, 4, 2, '#ffe030');
-  hline(ctx, 0, 7, 3, '#fff060');
-  hline(ctx, 1, 6, 4, '#ffe030');
-  px(ctx, 3, 5, '#ffe030'); px(ctx, 4, 5, '#ffe030');
-  vline(ctx, 3, 6, 7, '#ffc800'); px(ctx, 4, 6, '#ffc800'); px(ctx, 4, 7, '#ffc800');
+  px(ctx, 3, 0, '#FFF3A8'); px(ctx, 4, 0, '#FFF3A8');
+  vline(ctx, 3, 1, 2, '#FFE55E'); px(ctx, 4, 1, '#FFE55E'); px(ctx, 4, 2, '#FFE55E');
+  hline(ctx, 0, 7, 3, '#FFF3A8');
+  hline(ctx, 1, 6, 4, '#FFE55E');
+  px(ctx, 3, 5, '#FFE55E'); px(ctx, 4, 5, '#FFE55E');
+  vline(ctx, 3, 6, 7, '#C9B23F'); px(ctx, 4, 6, '#C9B23F'); px(ctx, 4, 7, '#C9B23F');
 }
 function drawNet(ctx) {
-  const C = '#b08838';
+  const C = '#C9B23F';
   for (let x = 4; x <= 28; x += 4) vline(ctx, x, 8, 24, C);
   for (let y = 8; y <= 24; y += 4) hline(ctx, 4, 28, y, C);
   for (let x = 4; x <= 28; x += 4)
     for (let y = 8; y <= 24; y += 4)
-      px(ctx, x, y, '#d0a850');
+      px(ctx, x, y, '#FFE55E');
 }
 
 // ─── obstacle generation ───────────────────────────────────────────────────────
@@ -875,7 +887,7 @@ function loadNamePref() {
 }
 function saveNamePref(name) { try { localStorage.setItem('crabName', String(name)); } catch {} }
 
-const CRAB_COLOR_NAMES = ['Blue', 'Red', 'Green', 'Purple'];
+const CRAB_COLOR_NAMES = ['Green', 'Blue', 'Orange', 'Purple'];
 
 // Carousel to choose your crab colour: ‹ arrow · preview crab + name · › arrow.
 // The arrows cycle myColorIdx through the palettes; the preview repaints in place.
@@ -885,7 +897,7 @@ function buildColorPicker() {
   box.innerHTML = '';
 
   const prev = document.createElement('button');
-  prev.className = 'cp-arrow'; prev.textContent = '‹'; prev.title = 'Previous colour';
+  prev.className = 'pill cp-arrow'; prev.textContent = '‹'; prev.title = 'Previous colour';
 
   const preview = document.createElement('div');
   preview.className = 'cp-preview';
@@ -896,7 +908,7 @@ function buildColorPicker() {
   preview.append(crab, name);
 
   const next = document.createElement('button');
-  next.className = 'cp-arrow'; next.textContent = '›'; next.title = 'Next colour';
+  next.className = 'pill cp-arrow'; next.textContent = '›'; next.title = 'Next colour';
 
   // Paint frame 0 of the current palette's crab into the preview + label it.
   const repaint = () => {
@@ -1189,11 +1201,11 @@ function handleServerMsg(msg) {
       break;
     }
     case 'error':
-      setStatus(`⚠ ${msg.msg}`);
+      setStatus(`// ${msg.msg}`);
       break;
     case 'replay-unavailable':
       // The recorded race couldn't be loaded (expired, or never recorded).
-      setStatus(`⚠ Replay unavailable: ${msg.reason || 'not found'}`);
+      setStatus(`// Replay unavailable: ${msg.reason || 'not found'}`);
       if (ws) { try { ws.close(); } catch {} ws = null; }
       replayMode = false;
       break;
@@ -1616,7 +1628,7 @@ function startGame(isMulti) {
     type:            Phaser.AUTO,
     width:           BASE_W * RES,
     height:          BASE_H * RES,
-    backgroundColor: '#1a2030',
+    backgroundColor: '#05080F',
     pixelArt:        true,
     parent:          'game-container',
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
@@ -1959,7 +1971,7 @@ class RaceScene extends Phaser.Scene {
           .setScale(RES);
 
     const gfx = this.add.graphics();
-    gfx.fillStyle(0x000000);
+    gfx.fillStyle(0x1F2430);
     gfx.fillRect(0, trackTop - 2*RES,           TOTAL_CELLS * CELLR, 2*RES);
     gfx.fillRect(0, trackTop + LANES * CELLR,    TOTAL_CELLS * CELLR, 2*RES);
 
@@ -1992,23 +2004,23 @@ class RaceScene extends Phaser.Scene {
     // ── HUD ────────────────────────────────────────────────────
     this.hudText = this.add.text(8 * RES, 8 * RES, '', {
       fontFamily: 'monospace', fontSize: fs(12),
-      color: '#7ec8e3', stroke: '#000', strokeThickness: 3,
+      color: '#5FFA74', stroke: '#05080F', strokeThickness: 3,
     }).setScrollFactor(0);
 
     this.statusText = this.add.text(W / 2, 8 * RES, '', {
       fontFamily: 'monospace', fontSize: fs(12),
-      color: '#ff6060', stroke: '#000', strokeThickness: 3,
+      color: '#F85149', stroke: '#05080F', strokeThickness: 3,
     }).setOrigin(0.5, 0).setScrollFactor(0);
 
     this.timerText = this.add.text(W - 8 * RES, 8 * RES, '0:00.00', {
       fontFamily: 'monospace', fontSize: fs(12),
-      color: '#e8e030', stroke: '#000', strokeThickness: 3,
+      color: '#FFFFFF', stroke: '#05080F', strokeThickness: 3,
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // DNF countdown banner — hidden until the first crab finishes (multiplayer).
     this.dnfText = this.add.text(W / 2, 22 * RES, '', {
       fontFamily: 'monospace', fontSize: fs(12),
-      color: '#ffb020', stroke: '#000', strokeThickness: 3,
+      color: '#FF965E', stroke: '#05080F', strokeThickness: 3,
     }).setOrigin(0.5, 0).setScrollFactor(0);
 
     // In multiplayer the race clock runs from the 'go' (create() fires then), so
@@ -2018,14 +2030,14 @@ class RaceScene extends Phaser.Scene {
     // In a replay there are no controls — swap the input hint for a REPLAY marker.
     // Racing against a stored PB adds a "vs 👻" note to the normal input hint.
     const footer = replayMode
-      ? '● REPLAY — watching a recorded race · 🏠 Home'
+      ? '// REPLAY — watching a recorded race · Home'
       : dailyChallengeMode
-        ? `⭐ Daily Challenge ${dailyChallengeDate()} · tap/→ move · swipe ↑↓ lane`
-        : (this.ghost ? '🏁 racing your best 👻 · tap/→ move · swipe ↑↓ lane'
+        ? `// DAILY ${dailyChallengeDate()} · tap/→ move · swipe ↑↓ lane`
+        : (this.ghost ? '// racing your best · tap/→ move · swipe ↑↓ lane'
                       : 'tap / → move   swipe ↑↓ shift lane   (WASD / arrows)');
     this.add.text(W / 2, H - 6 * RES, footer, {
       fontFamily: 'monospace', fontSize: fs(10),
-      color: replayMode ? '#e8d030' : '#ffffff', stroke: '#000', strokeThickness: 3,
+      color: replayMode ? '#5FFA74' : '#9AA1AF', stroke: '#05080F', strokeThickness: 3,
     }).setOrigin(0.5, 1).setScrollFactor(0);
 
     // ── input ──────────────────────────────────────────────────
@@ -2131,9 +2143,9 @@ class RaceScene extends Phaser.Scene {
     const startLane = Math.floor(LANES / 2);
     const spr = this.add.sprite(CELLR/2, trackTop + startLane * CELLR + CELLR/2, key)
       .setFrame(0).setScale(RES).setAlpha(0.4);
-    const lbl = this.add.text(CELLR/2, trackTop + startLane * CELLR + CELLR/2 - 10*RES, '👻 PB', {
+    const lbl = this.add.text(CELLR/2, trackTop + startLane * CELLR + CELLR/2 - 10*RES, 'PB', {
       fontFamily: 'monospace', fontSize: fs(8),
-      color: '#c8d8ff', stroke: '#000', strokeThickness: 3,
+      color: '#9AA1AF', stroke: '#05080F', strokeThickness: 3,
     }).setOrigin(0.5, 1).setAlpha(0.6);
     this.ghost = {
       record, spr, lbl, trackTop, colorIdx: ghostColor,
@@ -2164,10 +2176,10 @@ class RaceScene extends Phaser.Scene {
       const startLane = Math.max(0, Math.min(LANES - 1, Math.floor(LANES / 2) + i - 1));
       const spr = this.add.sprite(CELLR/2, trackTop + startLane * CELLR + CELLR/2, key)
         .setFrame(0).setScale(RES).setAlpha(0.35);
-      const label = `👻 ${(rec.name || 'Racer').slice(0, 12)}`;
+      const label = `${(rec.name || 'Racer').slice(0, 12)}`;
       const lbl = this.add.text(CELLR/2, trackTop + startLane * CELLR + CELLR/2 - 10*RES, label, {
         fontFamily: 'monospace', fontSize: fs(7),
-        color: '#ffe080', stroke: '#000', strokeThickness: 3,
+        color: '#FFE55E', stroke: '#05080F', strokeThickness: 3,
       }).setOrigin(0.5, 1).setAlpha(0.7);
       this.serverGhosts.push({
         spr, lbl, trackTop, colorIdx: ghostColor,
@@ -2264,7 +2276,7 @@ class RaceScene extends Phaser.Scene {
       const spr = this.add.sprite(sx, sy, key).setFrame(0).setScale(RES);
       const lbl = this.add.text(sx, sy - 10 * RES, p.name, {
         fontFamily: 'monospace', fontSize: fs(9),
-        color: PALETTE_HEX[p.colorIdx], stroke: '#000', strokeThickness: 3,
+        color: PALETTE_HEX[p.colorIdx], stroke: '#05080F', strokeThickness: 3,
       }).setOrigin(0.5, 1);
 
       this.playerCrabs.set(p.id, spr);
@@ -2481,7 +2493,7 @@ class RaceScene extends Phaser.Scene {
     // just waiting out each animation rather than gating on the race clock.
     this.replayHasTiming = (record.moves || []).some(m => m.t);
     this._startTimer();
-    this.statusText.setColor('#e8d030');
+    this.statusText.setColor('#5FFA74');
     this.statusText.setText('● REPLAY');
     this._pumpReplay();
   }
@@ -2630,9 +2642,9 @@ class RaceScene extends Phaser.Scene {
       ghostCs = this.ghost?.record?.finishTimeCs ?? null;
       if (Number.isFinite(ghostCs)) {
         const delta = this.raceTime - ghostCs; // <0 → faster than PB
-        if (delta < 0) { vsLine = `👻 beat your best by ${fmtTime(-delta)}!`; vsClass = 'good'; }
-        else if (delta > 0) { vsLine = `👻 best was faster by ${fmtTime(delta)}`; vsClass = 'bad'; }
-        else { vsLine = '👻 dead heat with your best!'; vsClass = 'even'; }
+        if (delta < 0) { vsLine = `Beat your best by ${fmtTime(-delta)}`; vsClass = 'good'; }
+        else if (delta > 0) { vsLine = `Your best was faster by ${fmtTime(delta)}`; vsClass = 'bad'; }
+        else { vsLine = 'Dead heat with your best'; vsClass = 'even'; }
       }
       const rec = buildSoloRecord(soloMoves, this.raceTime, playerName, myColorIdx);
       const isNewBest = saveBestGhost(seedStr, rec);
@@ -2685,9 +2697,9 @@ class RaceScene extends Phaser.Scene {
     };
     const hitTypes = OBSTACLE_KINDS.map(k => k.type).filter(t => this.obstacleCounts[t] > 0);
 
-    const heading = watching ? '🦀 REPLAY 🦀'
-                  : dailyChallengeMode ? `⭐ DAILY ${dailyChallengeDate()} ⭐`
-                  : '🦀 FINISH! 🦀';
+    const heading = watching ? 'Replay'
+                  : dailyChallengeMode ? `Daily ${dailyChallengeDate()}`
+                  : 'Finish';
     let html = `<h2><span class="h2-text">${heading}</span></h2>`;
     html += `<div class="r-time">Time: ${fmtTime(shownCs)}</div>`;
     if (vsLine) html += `<div class="r-vs ${vsClass}">${vsLine}</div>`;
@@ -2704,8 +2716,8 @@ class RaceScene extends Phaser.Scene {
     // Placeholder replaced async once submitScore resolves.
     if (!watching) html += `<div id="r-lb"></div>`;
 
-    html += `<div class="r-actions">${watching ? '' : `<button id="r-share">📋 Share replay</button>`}</div>`;
-    html += `<div class="r-hint">${watching ? 'tap 🏠 Home' : 'tap anywhere or press space to race again · 🏠 Home'}</div>`;
+    html += `<div class="r-actions">${watching ? '' : `<button id="r-share">Share replay</button>`}</div>`;
+    html += `<div class="r-hint">${watching ? 'tap Home' : 'tap anywhere or press space to race again · Home'}</div>`;
     showResultPanel(html);
 
     // Share-replay button: packs the whole race into a portable #replay link
@@ -2716,10 +2728,10 @@ class RaceScene extends Phaser.Scene {
         const rec = buildSoloRecord(soloMoves, this.raceTime, playerName, myColorIdx);
         const { url, tooLong } = soloReplayShareUrl(rec);
         const ok = await copyToClipboard(url);
-        shareBtn.textContent = ok ? (tooLong ? '✅ Copied (long link!)' : '✅ Link copied!') : '⚠ Copy failed — see console';
+        shareBtn.textContent = ok ? (tooLong ? 'Link copied — long link' : 'Link copied') : 'Copy failed — see console';
         shareBtn.classList.toggle('copied', ok);
         if (!ok) console.log('Replay link:', url);
-        setTimeout(() => { shareBtn.textContent = '📋 Share replay'; shareBtn.classList.remove('copied'); }, 2200);
+        setTimeout(() => { shareBtn.textContent = 'Share replay'; shareBtn.classList.remove('copied'); }, 2200);
       };
     }
 
@@ -2747,8 +2759,8 @@ class RaceScene extends Phaser.Scene {
     if (this.timerEvent) this.timerEvent.remove();
     if (Number.isFinite(finishTimeCs)) this.timerText.setText(fmtTime(finishTimeCs));
 
-    this.statusText.setColor('#e8e030');
-    this.statusText.setText(`🦀 FINISHED ${ordinal(place)} — waiting for the rest…`);
+    this.statusText.setColor('#5FFA74');
+    this.statusText.setText(`Finished ${ordinal(place)} — waiting for the rest…`);
   }
 
   // ── onOtherFinish (multiplayer, another crab) ───────────────────────────────
@@ -2818,14 +2830,14 @@ class RaceScene extends Phaser.Scene {
     const seedStr = raceSeed != null ? String(raceSeed) : '';
     const myName  = ($id('player-name').value.trim() || 'Crab').slice(0, 20);
 
-    let html = `<h2><span class="h2-text">🏁 RESULTS 🏁</span></h2><div id="result-rows">${rowsHtml}</div>`;
+    let html = `<h2><span class="h2-text">Results</span></h2><div id="result-rows">${rowsHtml}</div>`;
     // Placeholder replaced async once leaderboard fetch resolves.
     if (seedStr) html += `<div id="r-lb"></div>`;
     html += `<div class="r-actions">`;
-    if (canShare) html += `<button id="r-share">📋 Share replay</button>`;
-    if (isHost)   html += `<button id="r-again" class="primary">🏁 Race Again</button>`;
-    html += `<button id="r-lobby">🏠 Back to Lobby</button>`;
-    html += `<button id="r-leave" class="danger">🚪 Leave Room</button>`;
+    if (canShare) html += `<button id="r-share">Share replay</button>`;
+    if (isHost)   html += `<button id="r-again" class="primary">Race again</button>`;
+    html += `<button id="r-lobby">Back to lobby</button>`;
+    html += `<button id="r-leave" class="danger">Leave room</button>`;
     html += `</div>`;
     showResultPanel(html);
 
@@ -2845,10 +2857,10 @@ class RaceScene extends Phaser.Scene {
       const raceId = currentRaceId;
       shareBtn.onclick = async () => {
         const ok = await copyToClipboard(replayShareUrl(raceId));
-        shareBtn.textContent = ok ? '✅ Link copied!' : '⚠ Copy failed — see console';
+        shareBtn.textContent = ok ? 'Link copied' : 'Copy failed — see console';
         shareBtn.classList.toggle('copied', ok);
         if (!ok) console.log('Replay link:', replayShareUrl(raceId));
-        setTimeout(() => { shareBtn.textContent = '📋 Share replay'; shareBtn.classList.remove('copied'); }, 2000);
+        setTimeout(() => { shareBtn.textContent = 'Share replay'; shareBtn.classList.remove('copied'); }, 2000);
       };
     }
 

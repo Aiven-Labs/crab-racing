@@ -27,3 +27,4 @@ prometheus/prometheus.yml
 
 # Blog post drafts — kept local, not published to the repo
 docs/blog/
+.claude
