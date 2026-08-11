@@ -723,6 +723,7 @@ function ensurePassable(list, lanes, finishCell) {
 // then guarantees a walkable path so no seed can ever hard-block the track.
 function generateObstacles(seed, opts) {
   const { totalCells, lanes, startCell, finishCell, density = 0.38, obstacleKinds = OBSTACLE_KINDS } = opts;
+  if (!obstacleKinds.length) return []; // no kinds allowed → no obstacles at all
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
   const rng = mulberry32(seedNum);
   const list = [];
@@ -802,7 +803,7 @@ function applyGameConfig(game) {
   if (Number.isFinite(game.obstacleDensity))   OBSTACLE_DENSITY = game.obstacleDensity;
   if (Number.isFinite(game.obstacleStartCell)) OBSTACLE_START_CELL = game.obstacleStartCell;
   if (Array.isArray(game.zones) && game.zones.length)         ZONES = game.zones;
-  if (Array.isArray(game.obstacleKinds) && game.obstacleKinds.length) OBSTACLE_KINDS = game.obstacleKinds;
+  if (Array.isArray(game.obstacleKinds)) OBSTACLE_KINDS = game.obstacleKinds;
   if (Number.isFinite(game.dnfTimeoutSecs))    DNF_TIMEOUT_SECS = game.dnfTimeoutSecs;
   rebuildTrack();
 }
@@ -837,9 +838,12 @@ function scaleZones(baseZones, targetLen) {
 let ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
 let ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
 
-// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleKinds? }
-// omitting any field left at its default (blank number, all boxes checked) so that
-// "untouched" means "inherit the server/default config".
+// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleKinds }.
+// lanes/trackLength omit the field when left blank, so "untouched" means "inherit
+// the server/default config". obstacleKinds is always included (even as an empty
+// array) since an empty selection is a deliberate "no obstacles" choice, not a
+// left-at-default sentinel — sending the full list when every box happens to be
+// checked is harmless as it's equivalent to the default.
 function readLobbyConfig() {
   const cfg = {};
   const lanesRaw = $id('cfg-lanes').value.trim();
@@ -849,7 +853,10 @@ function readLobbyConfig() {
   const checked = ALL_OBSTACLE_KINDS
     .filter(k => { const box = $id('cfg-ob-' + k.type); return box && box.checked; })
     .map(k => k.type);
-  if (checked.length && checked.length < ALL_OBSTACLE_KINDS.length) cfg.obstacleKinds = checked;
+  // Always report the checked set, even if empty — an empty array is a
+  // deliberate "no obstacles" choice, not "untouched" (sending the full list
+  // when every box happens to be checked is equivalent to the default anyway).
+  cfg.obstacleKinds = checked;
   return cfg;
 }
 
@@ -992,10 +999,12 @@ function applyLobbyConfig(cfg) {
     const len = Math.max(LEN_MIN, Math.min(LEN_MAX, Math.round(cfg.trackLength)));
     ZONES = scaleZones(ALL_OBSTACLE_ZONES, len);
   }
-  if (Array.isArray(cfg.obstacleKinds) && cfg.obstacleKinds.length) {
+  if (Array.isArray(cfg.obstacleKinds)) {
+    // An explicit (possibly empty) array is a deliberate choice — honour it
+    // even when it filters out every kind. Missing/undefined falls through
+    // and keeps the current default OBSTACLE_KINDS untouched.
     const allow = new Set(cfg.obstacleKinds);
-    const filtered = ALL_OBSTACLE_KINDS.filter(k => allow.has(k.type));
-    if (filtered.length) OBSTACLE_KINDS = filtered;
+    OBSTACLE_KINDS = ALL_OBSTACLE_KINDS.filter(k => allow.has(k.type));
   }
   rebuildTrack();
 }

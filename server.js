@@ -415,13 +415,13 @@ function buildRoomConfig(overrides = {}) {
 
   // obstacleKinds: allowlist of type names → filter the server's kinds table, so
   // only known obstacles (with their fixed effects/turns/msgs) can appear. This
-  // ignores unknown types, preventing injection of arbitrary effects. Empty or
-  // missing → keep all default kinds.
+  // ignores unknown types, preventing injection of arbitrary effects. Missing
+  // (undefined) → keep all default kinds. An explicit empty array is honoured
+  // as "no obstacles" rather than falling back to the defaults.
   let obstacleKinds = GAME_CONFIG.obstacleKinds;
-  if (Array.isArray(o.obstacleKinds) && o.obstacleKinds.length) {
+  if (Array.isArray(o.obstacleKinds)) {
     const allow = new Set(o.obstacleKinds.map(String));
-    const filtered = GAME_CONFIG.obstacleKinds.filter(k => allow.has(k.type));
-    if (filtered.length) obstacleKinds = filtered;
+    obstacleKinds = GAME_CONFIG.obstacleKinds.filter(k => allow.has(k.type));
   }
 
   // dnfTimeoutSecs: seconds the field gets to finish after the first crab wins,
@@ -553,6 +553,7 @@ function ensurePassable(list, lanes, finishCell) {
 // then guarantees a walkable path so no seed can ever hard-block the track.
 function generateObstacles(seed, opts) {
   const { lanes, startCell, finishCell, density = 0.38, obstacleKinds } = opts;
+  if (!obstacleKinds || !obstacleKinds.length) return []; // no kinds allowed → no obstacles at all
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
   const rng = mulberry32(seedNum);
   const list = [];
