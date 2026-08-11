@@ -83,10 +83,10 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 #btn-home:focus-visible, summary:focus-visible {
   outline: 3px solid rgba(95,250,116,0.25); outline-offset: 2px;
 }
-#btn-solo, #btn-name-go, #result-panel button.primary {
+#btn-solo, #btn-name-go, #result-panel button.primary, .pill.primary {
   background: var(--brand-green); border-color: var(--brand-green); color: #05080F;
 }
-#btn-solo:hover, #btn-name-go:hover, #result-panel button.primary:hover {
+#btn-solo:hover, #btn-name-go:hover, #result-panel button.primary:hover, .pill.primary:hover {
   background: #7CFC8E; border-color: #7CFC8E; color: #05080F;
 }
 #btn-solo:active, #btn-name-go:active, #result-panel button.primary:active { transform: translateY(1px); }
@@ -157,6 +157,57 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 #cfg-obstacles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 #cfg-obstacles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 #cfg-obstacles input { width: auto; accent-color: var(--brand-green); }
+#btn-open-editor { margin-top: 2px; }
+
+/* ── Map editor modal ─────────────────────────────────── */
+#editor-modal {
+  position: fixed; inset: 0; z-index: 35;
+  background: rgba(5,8,15,0.85); backdrop-filter: blur(12px);
+  display: flex; justify-content: center; align-items: center;
+  font-family: var(--sans); color: var(--brand-fg); padding: 16px;
+}
+#editor-modal.hidden { display: none; }
+#editor-inner {
+  background: var(--brand-bg-card); border: 1px solid var(--brand-border);
+  border-radius: 12px; max-width: 480px; width: 100%; position: relative;
+  max-height: 92vh; overflow-y: auto; padding: 28px 28px 24px; text-align: left;
+}
+#editor-inner h2 {
+  font-family: var(--display); font-weight: 800; text-transform: uppercase;
+  font-size: 28px; line-height: 0.92; letter-spacing: -0.01em;
+  color: var(--brand-fg); margin-bottom: 4px;
+}
+#editor-inner .sub {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  color: var(--brand-fg-muted); margin-bottom: 16px; display: block;
+}
+#btn-editor-close {
+  position: absolute; top: 14px; right: 16px; width: auto;
+  background: none; border: none; color: var(--brand-fg-muted); font-size: 18px;
+  cursor: pointer; padding: 4px; line-height: 1; border-radius: 4px;
+}
+#btn-editor-close:hover { color: var(--brand-fg); background: none; }
+#editor-preview-wrap {
+  background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
+  border-radius: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px;
+  margin-bottom: 16px;
+}
+#editor-preview { display: block; image-rendering: pixelated; }
+#editor-controls { display: flex; flex-direction: column; gap: 12px; }
+.ed-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ed-field label { font-family: var(--sans); font-size: 13px; color: var(--brand-fg-muted); flex: 1; }
+.ed-field input[type="number"] { width: 72px; flex: 0 0 auto; }
+.ed-field input[type="range"] { flex: 1; accent-color: var(--brand-green); }
+.ed-field .ed-val { font-family: var(--mono); font-size: 12px; color: var(--brand-fg); width: 40px; text-align: right; flex: 0 0 auto; }
+#editor-zones { display: flex; flex-direction: column; gap: 6px; }
+#editor-zones .ez-row { display: flex; align-items: center; gap: 8px; }
+#editor-zones .ez-name { font-family: var(--sans); font-size: 12px; color: var(--brand-fg-muted); flex: 1; }
+#editor-zones input[type="number"] { width: 64px; flex: 0 0 auto; }
+#editor-title-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--brand-green); margin: 14px 0 6px;
+}
+#editor-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 
 /* ── Room browser ──────────────────────────────────── */
 #room-browser-body { padding-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -357,8 +408,15 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
           <label for="cfg-length">Track length</label>
           <input class="field" id="cfg-length" type="number" min="10" max="200" placeholder="46">
         </div>
+        <div class="ts-field">
+          <label for="cfg-density">Obstacle density</label>
+          <input class="field" id="cfg-density" type="number" min="0" max="1" step="0.01" placeholder="0.38">
+        </div>
         <label>Obstacles</label>
         <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+        <!-- Opens the visual map editor (issue #84): same settings, plus zone
+             composition, as sliders/inputs with a live canvas preview. -->
+        <button class="pill" id="btn-open-editor" type="button">Open map editor</button>
       </div>
     </details>
     <button class="pill" id="btn-solo">Solo Race</button>
@@ -431,6 +489,55 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
     <p>Lanes run the length of the beach — dodge trouble by switching lanes.
       There's always a clear path to the finish.</p>
     <ul id="help-obstacles"></ul>
+  </div>
+</div>
+
+<!-- ── Map editor modal (issue #84) ──────────────────────
+     Lets a player configure lanes / track length / zone composition /
+     obstacle density / obstacle kinds and see a live preview of the
+     resulting track before racing, instead of guessing at a raw seed.
+     "Use this track" writes the result back into the existing lobby
+     fields (#cfg-lanes / #cfg-length / #cfg-density / #cfg-obstacles),
+     so it plugs into the same readLobbyConfig()/applyLobbyConfig() path
+     Solo and Join already use. ── -->
+<div id="editor-modal" class="hidden">
+  <div id="editor-inner">
+    <button id="btn-editor-close" title="Close">✕</button>
+    <h2>Map editor</h2>
+    <span class="sub">// live preview — no seed guessing required</span>
+
+    <div id="editor-preview-wrap">
+      <canvas id="editor-preview" width="640" height="120"></canvas>
+    </div>
+
+    <div id="editor-controls">
+      <div class="ed-field">
+        <label for="ed-lanes">Lanes</label>
+        <input type="range" id="ed-lanes" min="1" max="12" step="1">
+        <span class="ed-val" id="ed-lanes-val"></span>
+      </div>
+      <div class="ed-field">
+        <label for="ed-length">Track length</label>
+        <input type="range" id="ed-length" min="10" max="200" step="1">
+        <span class="ed-val" id="ed-length-val"></span>
+      </div>
+      <div class="ed-field">
+        <label for="ed-density">Obstacle density</label>
+        <input type="range" id="ed-density" min="0" max="1" step="0.01">
+        <span class="ed-val" id="ed-density-val"></span>
+      </div>
+
+      <div id="editor-title-label">Zone composition</div>
+      <div id="editor-zones"><!-- per-zone length inputs, built by buildEditorZoneRows() --></div>
+
+      <div id="editor-title-label">Obstacles</div>
+      <div id="editor-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+    </div>
+
+    <div id="editor-actions">
+      <button class="pill primary" id="btn-editor-use">Use this track</button>
+      <button class="pill" id="btn-editor-cancel">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -837,7 +944,7 @@ function scaleZones(baseZones, targetLen) {
 let ALL_OBSTACLE_KINDS = OBSTACLE_KINDS.slice();
 let ALL_OBSTACLE_ZONES = ZONES.map(z => ({ ...z }));
 
-// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleKinds? }
+// Read the lobby's track-setting inputs. Returns { lanes?, trackLength?, obstacleDensity?, obstacleKinds? }
 // omitting any field left at its default (blank number, all boxes checked) so that
 // "untouched" means "inherit the server/default config".
 function readLobbyConfig() {
@@ -846,6 +953,8 @@ function readLobbyConfig() {
   if (lanesRaw !== '') cfg.lanes = Number(lanesRaw);
   const lenRaw = $id('cfg-length').value.trim();
   if (lenRaw !== '') cfg.trackLength = Number(lenRaw);
+  const densityRaw = $id('cfg-density').value.trim();
+  if (densityRaw !== '') cfg.obstacleDensity = Number(densityRaw);
   const checked = ALL_OBSTACLE_KINDS
     .filter(k => { const box = $id('cfg-ob-' + k.type); return box && box.checked; })
     .map(k => k.type);
@@ -853,22 +962,26 @@ function readLobbyConfig() {
   return cfg;
 }
 
-// Build the obstacle on/off checkboxes from the current default kinds. Preserves
-// the user's existing checked state across rebuilds (a kind already on screen keeps
-// its box; a newly-appearing kind defaults to checked), so a late config-load
-// refresh never clobbers a selection the player already made.
-function buildObstacleToggles() {
-  const box = $id('cfg-obstacles');
+const OBSTACLE_LABELS = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
+
+// Build the obstacle on/off checkboxes from the current default kinds into
+// `containerId`, with input ids `${idPrefix}-ob-${type}`. Preserves the user's
+// existing checked state across rebuilds (a kind already on screen keeps its
+// box; a newly-appearing kind defaults to checked), so a late config-load
+// refresh (or reopening the map editor) never clobbers a selection already made.
+// Used for both the lobby's #cfg-obstacles (idPrefix 'cfg') and the map editor's
+// #editor-obstacles (idPrefix 'ed', see openMapEditor()).
+function buildObstacleToggles(containerId = 'cfg-obstacles', idPrefix = 'cfg') {
+  const box = $id(containerId);
   if (!box) return;
-  const labels = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
   const prev = {};
   box.querySelectorAll('input[type=checkbox]').forEach(b => {
-    prev[b.id.replace(/^cfg-ob-/, '')] = b.checked;
+    prev[b.id.replace(new RegExp(`^${idPrefix}-ob-`), '')] = b.checked;
   });
   box.innerHTML = ALL_OBSTACLE_KINDS.map(k => {
     const on = prev[k.type] !== false; // unknown → default checked
-    return `<label><input type="checkbox" id="cfg-ob-${k.type}"${on ? ' checked' : ''}>` +
-           `${labels[k.type] || k.type}</label>`;
+    return `<label><input type="checkbox" id="${idPrefix}-ob-${k.type}"${on ? ' checked' : ''}>` +
+           `${OBSTACLE_LABELS[k.type] || k.type}</label>`;
   }).join('');
 }
 
@@ -936,9 +1049,10 @@ function buildColorPicker() {
 // blank field honestly shows the value it will inherit (which the deployed
 // game-config.json may have changed from the baked-in 3 / 46).
 function syncLobbyPlaceholders() {
-  const lanes = $id('cfg-lanes'), len = $id('cfg-length');
-  if (lanes) lanes.placeholder = String(LANES);
-  if (len)   len.placeholder   = String(TOTAL_CELLS);
+  const lanes = $id('cfg-lanes'), len = $id('cfg-length'), density = $id('cfg-density');
+  if (lanes)   lanes.placeholder   = String(LANES);
+  if (len)     len.placeholder     = String(TOTAL_CELLS);
+  if (density) density.placeholder = String(OBSTACLE_DENSITY);
 }
 
 // Refresh the baselines the lobby scales/filters from. Call at init (from the
@@ -996,6 +1110,12 @@ function applyLobbyConfig(cfg) {
     const allow = new Set(cfg.obstacleKinds);
     const filtered = ALL_OBSTACLE_KINDS.filter(k => allow.has(k.type));
     if (filtered.length) OBSTACLE_KINDS = filtered;
+  }
+  // obstacleDensity is a client-only tunable (the multiplayer server does not
+  // currently accept a density override — see buildRoomConfig() in server.js),
+  // so this only takes effect for solo / daily-challenge races generated locally.
+  if (Number.isFinite(cfg.obstacleDensity)) {
+    OBSTACLE_DENSITY = Math.max(0, Math.min(1, cfg.obstacleDensity));
   }
   rebuildTrack();
 }
@@ -1758,7 +1878,247 @@ document.addEventListener('keydown', e => {
   if (tag !== 'INPUT' && tag !== 'TEXTAREA' && $id('lobby').classList.contains('hidden')) {
     goHome();
   }
+  // Priority 3: close the map editor if it's open (without applying changes).
+  if (!$id('editor-modal').classList.contains('hidden')) { closeMapEditor(false); }
 });
+
+// ─── Map editor (issue #84) ─────────────────────────────────────────────────
+// Lets a player configure lanes / track length / zone composition / obstacle
+// density / obstacle kinds and see a LIVE preview of the resulting track
+// before racing, instead of guessing at a raw seed. The preview is rendered
+// with a plain 2D canvas re-using the exact tile/obstacle sprite generators
+// the race scene itself uses (drawShore, drawRock, …), and the track/obstacle
+// data comes straight from the same pure functions the race uses
+// (rebuildTrack(), generateObstacles()) — never buildObstacles(), so it never
+// touches the live OBSTACLES/OBS_MAP a race in progress would depend on.
+//
+// While the editor is open it edits the *same* scratch globals
+// (LANES/ZONES/OBSTACLE_KINDS/OBSTACLE_DENSITY/TRACK/…) that
+// applyLobbyConfig() already treats as "pending settings for the next race" —
+// a snapshot is taken on open and restored on Cancel/Escape/backdrop-click so
+// browsing the editor without confirming never changes the lobby's track.
+// "Use this track" instead writes the edited values back into the existing
+// #cfg-lanes / #cfg-length / #cfg-density / #cfg-obstacles fields, so Solo and
+// Join keep working through their existing readLobbyConfig()/applyLobbyConfig()
+// path unchanged.
+//
+// NOTE (v1 scope): obstacleDensity is a client-only tunable — the multiplayer
+// server (server.js buildRoomConfig()) does not read a density override, so a
+// custom density only takes effect for solo / daily-challenge races generated
+// locally. Joining a room with a custom density still sends the field (see
+// readLobbyConfig()); the server just ignores it today. See the task notes for
+// why this stays out of scope for this pass.
+
+const EDITOR_PREVIEW_SEED = 'map-editor-preview'; // stable seed: obstacles only
+                                                   // reshuffle when settings change,
+                                                   // not on every redraw
+let editorSnapshot = null; // { lanes, zones, obstacleKinds, obstacleDensity } captured on open
+
+const EDITOR_TILE_DRAWERS = {
+  shore: drawShore, wetSand: drawWetSand, drySand: drawDrySand,
+  undergrowth: drawUndergrowth, treeline: drawTreeline, finish: drawFinish,
+};
+const EDITOR_OB_DRAWERS = {
+  rock: drawRock, hole: drawHole, jelly: drawJelly, beach: drawBeach, net: drawNet,
+};
+const EDITOR_ZONE_LABELS = {
+  shore: 'Shore', wetSand: 'Wet sand', drySand: 'Dry sand',
+  undergrowth: 'Undergrowth', treeline: 'Treeline', finish: 'Finish',
+};
+
+// Small canvas caches so the preview doesn't re-render every 32×32 sprite from
+// scratch on every input event — built once per tile/obstacle kind.
+const _editorTileCache = {};
+function editorTileCanvas(tile) {
+  if (!_editorTileCache[tile]) {
+    const { canvas, ctx } = makeCanvas(32, 32);
+    (EDITOR_TILE_DRAWERS[tile] || drawDrySand)(ctx);
+    _editorTileCache[tile] = canvas;
+  }
+  return _editorTileCache[tile];
+}
+const _editorObCache = {};
+function editorObCanvas(type) {
+  if (!_editorObCache[type]) {
+    const { canvas, ctx } = makeCanvas(32, 32);
+    (EDITOR_OB_DRAWERS[type] || drawRock)(ctx);
+    _editorObCache[type] = canvas;
+  }
+  return _editorObCache[type];
+}
+
+// Read the editor's per-zone length inputs (built by buildEditorZoneRows) into
+// a ZONES-shaped array.
+function readEditorZones() {
+  const box = $id('editor-zones');
+  return Array.from(box.querySelectorAll('input')).map(inp => ({
+    tile: inp.dataset.tile,
+    len:  Math.max(1, Math.round(Number(inp.value) || 1)),
+  }));
+}
+
+// Build the per-zone length inputs from `zones` (ZONES-shaped). Rebuilt
+// wholesale whenever the track-length slider moves (so the split re-derives
+// proportionally via scaleZones()); direct edits to a single zone's input
+// otherwise leave the rest alone.
+function buildEditorZoneRows(zones) {
+  const box = $id('editor-zones');
+  if (!box) return;
+  box.innerHTML = zones.map((z, i) => `
+    <div class="ez-row">
+      <span class="ez-name">${EDITOR_ZONE_LABELS[z.tile] || z.tile}</span>
+      <input class="field" type="number" min="1" max="100" step="1"
+             id="ed-zone-${i}" data-tile="${z.tile}" value="${z.len}">
+    </div>`).join('');
+  box.querySelectorAll('input').forEach(inp => inp.addEventListener('input', onEditorZoneChange));
+}
+
+// A single zone's length changed directly: re-sync the length slider's
+// readout to the new total (no rescale — the player's edit wins) and redraw.
+function onEditorZoneChange() {
+  const total = readEditorZones().reduce((s, z) => s + z.len, 0);
+  $id('ed-length').value = Math.max(LEN_MIN, Math.min(LEN_MAX, total));
+  updateEditorPreview();
+}
+
+// Recompute the pending track from the current editor controls, apply it to
+// the shared track globals (see note above), and redraw the preview canvas.
+function updateEditorPreview() {
+  const lanes = Math.max(LANE_MIN, Math.min(LANE_MAX,
+    Math.round(Number($id('ed-lanes').value) || LANES)));
+  const zones   = readEditorZones();
+  const density = Math.max(0, Math.min(1, Number($id('ed-density').value)));
+
+  const checked = ALL_OBSTACLE_KINDS.filter(k => {
+    const box = $id('ed-ob-' + k.type);
+    return box && box.checked;
+  });
+  const obstacleKinds = checked.length ? checked : ALL_OBSTACLE_KINDS;
+
+  $id('ed-lanes-val').textContent   = String(lanes);
+  $id('ed-length-val').textContent  = String(zones.reduce((s, z) => s + z.len, 0));
+  $id('ed-density-val').textContent = density.toFixed(2);
+
+  LANES            = lanes;
+  ZONES            = zones;
+  OBSTACLE_DENSITY = density;
+  OBSTACLE_KINDS   = obstacleKinds;
+  rebuildTrack();
+
+  const obstacles = generateObstacles(EDITOR_PREVIEW_SEED, {
+    totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
+    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
+  });
+  drawEditorPreview(TRACK, LANES, obstacles);
+}
+
+// Render the track preview into #editor-preview. Cell size shrinks to fit a
+// ~640px-wide canvas (clamped so very long/short tracks stay legible); the
+// wrapper scrolls horizontally for anything wider than that.
+function drawEditorPreview(track, lanes, obstacles) {
+  const canvas = $id('editor-preview');
+  const totalCells = Math.max(1, track.length);
+  let cellPx = Math.floor(640 / totalCells);
+  cellPx = Math.max(4, Math.min(20, cellPx));
+  canvas.width  = totalCells * cellPx;
+  canvas.height = lanes * cellPx;
+
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  for (let c = 0; c < totalCells; c++) {
+    const tile = editorTileCanvas(track[c]);
+    for (let l = 0; l < lanes; l++) ctx.drawImage(tile, c * cellPx, l * cellPx, cellPx, cellPx);
+  }
+  for (const o of obstacles) {
+    ctx.drawImage(editorObCanvas(o.type), o.cell * cellPx, o.lane * cellPx, cellPx, cellPx);
+  }
+}
+
+// Open the editor, seeded from the lobby's current track-settings fields
+// (falling back to the live defaults for anything left blank).
+function openMapEditor() {
+  editorSnapshot = {
+    lanes: LANES,
+    zones: ZONES.map(z => ({ ...z })),
+    obstacleKinds: OBSTACLE_KINDS.slice(),
+    obstacleDensity: OBSTACLE_DENSITY,
+  };
+
+  const lanesRaw   = $id('cfg-lanes').value.trim();
+  const lenRaw     = $id('cfg-length').value.trim();
+  const densityRaw = $id('cfg-density').value.trim();
+  const lanes   = Math.max(LANE_MIN, Math.min(LANE_MAX,
+    Math.round(lanesRaw !== '' ? Number(lanesRaw) : LANES)));
+  const len     = Math.max(LEN_MIN, Math.min(LEN_MAX,
+    Math.round(lenRaw !== '' ? Number(lenRaw) : TOTAL_CELLS)));
+  const density = Math.max(0, Math.min(1, densityRaw !== '' ? Number(densityRaw) : OBSTACLE_DENSITY));
+
+  $id('ed-lanes').value   = lanes;
+  $id('ed-length').value  = len;
+  $id('ed-density').value = density;
+
+  buildEditorZoneRows(scaleZones(ALL_OBSTACLE_ZONES, len));
+
+  // Build the editor's own obstacle checkboxes, then mirror the lobby's
+  // current checked state onto them (buildObstacleToggles() otherwise
+  // defaults every kind to checked).
+  buildObstacleToggles('editor-obstacles', 'ed');
+  ALL_OBSTACLE_KINDS.forEach(k => {
+    const src = $id('cfg-ob-' + k.type), dst = $id('ed-ob-' + k.type);
+    if (src && dst) dst.checked = src.checked;
+  });
+
+  $id('editor-modal').classList.remove('hidden');
+  updateEditorPreview();
+}
+
+// Close the editor. `applyChanges` false (Cancel/Escape/backdrop) restores the
+// pre-open snapshot so an abandoned edit never leaks into the lobby's track.
+function closeMapEditor(applyChanges) {
+  if (!applyChanges && editorSnapshot) {
+    LANES            = editorSnapshot.lanes;
+    ZONES            = editorSnapshot.zones;
+    OBSTACLE_KINDS   = editorSnapshot.obstacleKinds;
+    OBSTACLE_DENSITY = editorSnapshot.obstacleDensity;
+    rebuildTrack();
+  }
+  editorSnapshot = null;
+  $id('editor-modal').classList.add('hidden');
+}
+
+// "Use this track": the live globals already hold the edited track (every
+// control change applies it via updateEditorPreview()) — just write it back
+// into the lobby's own fields so Solo / Join pick it up through the existing
+// readLobbyConfig() → applyLobbyConfig() / join-message path, unchanged.
+function useEditorTrack() {
+  $id('cfg-lanes').value   = String(LANES);
+  $id('cfg-length').value  = String(TOTAL_CELLS);
+  $id('cfg-density').value = String(Math.round(OBSTACLE_DENSITY * 100) / 100);
+
+  buildObstacleToggles(); // rebuild #cfg-obstacles against the current kind set
+  ALL_OBSTACLE_KINDS.forEach(k => {
+    const src = $id('ed-ob-' + k.type), dst = $id('cfg-ob-' + k.type);
+    if (src && dst) dst.checked = src.checked;
+  });
+
+  closeMapEditor(true);
+}
+
+$id('btn-open-editor').onclick   = openMapEditor;
+$id('btn-editor-close').onclick  = () => closeMapEditor(false);
+$id('btn-editor-cancel').onclick = () => closeMapEditor(false);
+$id('btn-editor-use').onclick    = useEditorTrack;
+$id('ed-lanes').addEventListener('input', updateEditorPreview);
+$id('ed-density').addEventListener('input', updateEditorPreview);
+$id('ed-length').addEventListener('input', () => {
+  const len = Math.max(LEN_MIN, Math.min(LEN_MAX,
+    Math.round(Number($id('ed-length').value) || TOTAL_CELLS)));
+  buildEditorZoneRows(scaleZones(ALL_OBSTACLE_ZONES, len));
+  updateEditorPreview();
+});
+$id('editor-obstacles').addEventListener('change', updateEditorPreview);
+// Click the dim backdrop (but not the panel) to cancel, matching the help modal.
+$id('editor-modal').addEventListener('click', e => { if (e.target.id === 'editor-modal') closeMapEditor(false); });
 
 // Load server config, then — if opened with a replay share link — jump straight
 // into the replay instead of the lobby. Two link forms:
