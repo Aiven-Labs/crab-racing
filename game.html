@@ -725,11 +725,18 @@ function generateObstacles(seed, opts) {
   const { totalCells, lanes, startCell, finishCell, density = 0.38, obstacleKinds = OBSTACLE_KINDS } = opts;
   if (!obstacleKinds.length) return []; // no kinds allowed → no obstacles at all
   const seedNum = typeof seed === 'number' ? (seed >>> 0) : hashSeed(String(seed));
-  const rng = mulberry32(seedNum);
+  // Two independent RNG streams derived from the same seed via distinct salts:
+  // `rng` decides ONLY presence (density) and kind per cell; `laneRng` decides
+  // ONLY the lane within a cell. This guarantees that for a fixed seed, WHICH
+  // cells get obstacles and WHAT KIND they are is fully independent of `lanes`
+  // — changing lane count only reshuffles which lane an obstacle lands in.
+  // (See issue #83 — lane count and seed must not feel coupled.)
+  const rng     = mulberry32(seedNum);
+  const laneRng = mulberry32((seedNum + 0x9E3779B9) >>> 0);
   const list = [];
   for (let cell = startCell; cell < finishCell - 1; cell++) {
     if (rng() >= density) continue;
-    const lane = Math.floor(rng() * lanes);
+    const lane = Math.floor(laneRng() * lanes);
     const kind = obstacleKinds[Math.floor(rng() * obstacleKinds.length)];
     list.push({ cell, lane, ...kind });
   }
