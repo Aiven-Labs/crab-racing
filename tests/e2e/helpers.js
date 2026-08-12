@@ -8,11 +8,11 @@ async function pointAtServer(page) {
 }
 
 // Shrinks the track so a race finishes in a handful of key presses instead of
-// dozens — keeps the e2e run fast and avoids relying on obstacle RNG. The
-// inputs live inside a collapsed <details>, so it must be opened first.
+// dozens — keeps the e2e run fast and avoids relying on obstacle RNG. Lanes
+// are fixed at 3 (not configurable), so only track length needs shrinking.
+// The input lives inside a collapsed <details>, so it must be opened first.
 async function useShortTrack(page) {
   await page.locator('#track-settings').evaluate(el => { el.open = true; });
-  await page.fill('#cfg-lanes', '1');
   await page.fill('#cfg-length', '10');
 }
 

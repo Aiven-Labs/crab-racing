@@ -372,9 +372,12 @@ function loadGameConfig() {
 // baseline a room inherits when the creator doesn't customise a field.
 const GAME_CONFIG = loadGameConfig();
 
+// Lane count is fixed — not a per-lobby override. Three lanes keeps the chaos
+// (and the pandemonium of crabs colliding) tight regardless of client input.
+const FIXED_LANES = 3;
+
 // Bounds for per-lobby overrides — clamped server-side so a malicious/buggy
-// client can't hang the server with e.g. lanes: 1e9 or a 1e9-cell track.
-const LANE_MIN = 1,  LANE_MAX = 12;
+// client can't hang the server with e.g. a 1e9-cell track.
 const LEN_MIN  = 10, LEN_MAX  = 200;
 const DNF_MIN  = 3,  DNF_MAX  = 120; // seconds the field gets after the first finish
 
@@ -400,10 +403,8 @@ function scaleZones(baseZones, targetLen) {
 function buildRoomConfig(overrides = {}) {
   const o = overrides || {};
 
-  // lanes: integer within [LANE_MIN, LANE_MAX]; bad/missing → default.
-  let lanes = Math.round(Number(o.lanes));
-  if (!Number.isFinite(lanes)) lanes = GAME_CONFIG.lanes;
-  lanes = Math.max(LANE_MIN, Math.min(LANE_MAX, lanes));
+  // lanes: fixed at FIXED_LANES — not client-configurable.
+  const lanes = FIXED_LANES;
 
   // trackLength: integer within [LEN_MIN, LEN_MAX] → scaled zones; else default zones.
   let zones = GAME_CONFIG.zones;
@@ -461,7 +462,7 @@ function configFromStored(stored = {}) {
   const totalCells = zones.reduce((s, z) => s + z.len, 0);
   const finishCell = totalCells - zones[zones.length - 1].len;
   return {
-    lanes:             stored.lanes             ?? GAME_CONFIG.lanes,
+    lanes:             FIXED_LANES, // fixed regardless of what an old replay recorded
     zones,
     obstacleKinds:     stored.obstacleKinds     ?? GAME_CONFIG.obstacleKinds,
     obstacleStartCell: stored.obstacleStartCell ?? GAME_CONFIG.obstacleStartCell,
