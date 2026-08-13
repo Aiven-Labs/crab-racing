@@ -124,6 +124,11 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
   color: var(--brand-fg-muted); text-align: center; margin-top: -6px;
 }
 #solo-seed-value { color: var(--brand-green); }
+#seed-settings-warning {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  color: var(--brand-orange); margin-top: 8px;
+}
+#seed-settings-warning.hidden { display: none; }
 #challenge-banner {
   font-family: var(--mono); font-size: 12px; line-height: 1.5;
   color: var(--brand-yellow); background: rgba(255,229,94,0.08);
@@ -480,6 +485,15 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
         <summary>Use custom seed</summary>
         <div class="seed-body">
           <input class="field" id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+          <!-- Shown when a custom seed is typed AND the track settings below
+               are non-default — a seed alone doesn't carry them, so sharing
+               just the seed number won't reproduce this track for anyone
+               else. See hasCustomTrackSettings()/updateSeedSettingsWarning(). -->
+          <div id="seed-settings-warning" class="hidden">
+            ⚠️ Your track length/density/obstacles aren't stored in this seed —
+            sharing just the seed number won't reproduce them for someone else.
+            Use "Challenge a friend" below to share the exact track.
+          </div>
         </div>
       </details>
       <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
@@ -1583,10 +1597,34 @@ function showMenuView(view) {
 // track-settings fields to the shared track globals (same globals startSolo()
 // itself applies at race time) and redraws #solo-preview from the real race
 // seed (getSoloSeed()) — so what's previewed is exactly what gets raced.
+// True once the player has touched the length/density fields or unchecked
+// any obstacle kind — i.e. the track settings a bare seed number won't carry.
+function hasCustomTrackSettings() {
+  const lenTouched  = $id('cfg-length').value.trim()  !== '';
+  const densTouched = $id('cfg-density').value.trim() !== '';
+  const allChecked  = ALL_OBSTACLE_KINDS.every(k => {
+    const box = $id('cfg-ob-' + k.type);
+    return !box || box.checked;
+  });
+  return lenTouched || densTouched || !allChecked;
+}
+
+// Warn when a custom seed is typed while track settings are also customized —
+// the seed alone won't carry length/density/obstacles, so sharing just the
+// seed number (rather than a full "Challenge a friend" link) won't reproduce
+// this track for anyone else. Not shown for a received challenge — its own
+// settings are already locked in, see setChallengeLock().
+function updateSeedSettingsWarning() {
+  const seedTyped = $id('seed-code').value.trim() !== '';
+  const show = !challengeLocked && seedTyped && hasCustomTrackSettings();
+  $id('seed-settings-warning').classList.toggle('hidden', !show);
+}
+
 function updateSoloPreview() {
   applyLobbyConfig(readLobbyConfig());
   const seed = getSoloSeed();
   $id('solo-seed-value').textContent = seed;
+  updateSeedSettingsWarning();
   const obstacles = generateObstacles(seed, {
     totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
     finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
