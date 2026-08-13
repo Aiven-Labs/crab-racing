@@ -209,12 +209,16 @@ function serveStatic(req, res) {
     res.writeHead(405); res.end('405 Method Not Allowed'); return;
   }
 
-  // "/" → game.html, anything else → filename in project dir.
+  // "/" → game.html, anything else → filename in project dir. Compared against
+  // `route` (query string already stripped above) rather than the raw req.url,
+  // so a link like /?room=room1 or /?replay=<id> still serves game.html instead
+  // of falling through to path.join(__dirname, '/') — the project directory
+  // itself, which fs.readFile then 500s on (EISDIR, not ENOENT).
   // Decode percent-escapes so a request like /%2e%2e/.env can't smuggle a
   // traversal past the containment check below.
   let urlPath;
   try {
-    urlPath = req.url === '/' ? '/game.html' : decodeURIComponent(req.url.split('?')[0]);
+    urlPath = route === '/' ? '/game.html' : decodeURIComponent(route);
   } catch {
     res.writeHead(400); res.end('400 Bad Request'); return; // malformed %-escape
   }
