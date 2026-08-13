@@ -119,6 +119,21 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 .menu-back {
   width: auto; align-self: flex-start; padding: 8px 16px; font-size: 13px;
 }
+#challenge-banner {
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  color: var(--brand-yellow); background: rgba(255,229,94,0.08);
+  border: 1px solid var(--brand-yellow); border-radius: 8px; padding: 10px 12px;
+}
+#challenge-banner.hidden { display: none; }
+#challenge-banner button {
+  display: block; margin-top: 6px; width: auto; padding: 6px 12px;
+  font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer;
+  background: transparent; border: 1px solid var(--brand-yellow); border-radius: 9999px;
+  color: var(--brand-yellow);
+}
+#challenge-banner button:hover { background: rgba(255,229,94,0.12); }
+.field:disabled, #btn-open-editor:disabled { opacity: 0.5; cursor: not-allowed; }
+#cfg-obstacles label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
 
 .field {
   background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
@@ -445,6 +460,13 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
       <div id="solo-preview-wrap">
         <canvas id="solo-preview" width="640" height="120"></canvas>
       </div>
+      <!-- Shown while a #challenge= link's seed/settings are loaded — see
+           applyChallenge()/setChallengeLock(). Fields stay locked so the
+           track can't be quietly loosened while keeping the shared seed. -->
+      <div id="challenge-banner" class="hidden">
+        🔗 Challenge track loaded — seed &amp; settings locked.
+        <button id="btn-clear-challenge" type="button">Use my own settings</button>
+      </div>
       <details id="seed-section">
         <summary>Use custom seed</summary>
         <div class="seed-body">
@@ -629,6 +651,7 @@ let replayMode   = false; // true while watching a recorded race (spectator, no 
 let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
 let soloToken     = null;  // one-time token issued by GET /solo-token before each solo race
 let soloPreviewSeed = null; // seed backing the live #solo-preview track (cached — see getSoloSeed())
+let challengeLocked = false; // true while a #challenge= link's seed/settings are loaded (see setChallengeLock())
 let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
 let dailyChallengeMode = false; // true while playing the daily challenge
 let dailyServerGhosts  = [];    // ghost records fetched from server for the daily challenge
@@ -1921,10 +1944,15 @@ $id('btn-daily').onclick = startDailyChallenge;
 
 $id('btn-menu-solo').onclick  = () => {
   soloPreviewSeed = null; // fresh randomized map each time Solo Race is opened
+  setChallengeLock(false); // entering fresh from the main menu — not via a challenge link
   showMenuView('solo');
   updateSoloPreview();
 };
 $id('btn-menu-multi').onclick = () => showMenuView('multi');
+$id('btn-clear-challenge').onclick = () => {
+  setChallengeLock(false);
+  updateSoloPreview();
+};
 $id('btn-solo-back').onclick  = () => showMenuView('main');
 $id('btn-multi-back').onclick = () => showMenuView('main');
 
@@ -2417,7 +2445,25 @@ function applyChallenge(rec) {
   $id('track-settings').open = true;
 
   showMenuView('solo');
+  setChallengeLock(true);
   updateSoloPreview();
+}
+
+// Lock (or unlock) the seed + track-settings fields. Locked while a
+// #challenge= link is active so the recipient can't keep the shared seed
+// but quietly loosen the density/obstacles/length before racing — which
+// would silently produce an easier track while still looking like "the same
+// seed" to anyone comparing times. buildObstacleToggles() rebuilds
+// #cfg-obstacles' checkboxes (e.g. from applyChallenge()), so re-apply the
+// per-checkbox disabled state each time it's called while locked.
+function setChallengeLock(locked) {
+  challengeLocked = locked;
+  ['cfg-length', 'cfg-density', 'seed-code', 'btn-open-editor'].forEach(id => {
+    const el = $id(id);
+    if (el) el.disabled = locked;
+  });
+  $id('cfg-obstacles').querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = locked; });
+  $id('challenge-banner').classList.toggle('hidden', !locked);
 }
 
 // ─── best-run "ghost" store ────────────────────────────────────────────────────
