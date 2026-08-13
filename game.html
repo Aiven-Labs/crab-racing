@@ -1767,7 +1767,7 @@ function joinMulti() {
   setStatus('Connecting…');
   try { ws = new WebSocket(wsUrl); }
   catch (e) { setStatus(`Bad URL: ${e.message}`); return; }
-  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed, config }));
+  ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', name, roomId, seed, config, colorIdx: myColorIdx }));
   ws.onmessage = e  => handleServerMsg(JSON.parse(e.data));
   ws.onerror   = ()  => setStatus('Connection failed — is the server running?');
   ws.onclose   = handleWsClose;
