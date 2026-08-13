@@ -1449,12 +1449,20 @@ async function main() {
 
         const playerId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
-        // Pick the lowest colorIdx (0–3) not currently in use; if all four are
-        // taken (rooms with 5+ players) fall back to cycling by join order.
+        // Honor the player's requested color if it's a valid, unclaimed slot;
+        // otherwise fall back to the lowest colorIdx (0–3) not currently in
+        // use, or — if all four are taken (rooms with 5+ players) — cycle by
+        // join order.
+        const requestedColor = Number(msg.colorIdx);
         let colorIdx = 0;
-        for (let i = 0; i < 4; i++) {
-          if (!room.usedColors.has(i)) { colorIdx = i; break; }
-          if (i === 3) colorIdx = room.players.size % 4; // all taken — wrap
+        if (Number.isInteger(requestedColor) && requestedColor >= 0 && requestedColor < 4
+            && !room.usedColors.has(requestedColor)) {
+          colorIdx = requestedColor;
+        } else {
+          for (let i = 0; i < 4; i++) {
+            if (!room.usedColors.has(i)) { colorIdx = i; break; }
+            if (i === 3) colorIdx = room.players.size % 4; // all taken — wrap
+          }
         }
         room.usedColors.add(colorIdx);
 
