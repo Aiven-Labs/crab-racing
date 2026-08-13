@@ -119,6 +119,11 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 .menu-back {
   width: auto; align-self: flex-start; padding: 8px 16px; font-size: 13px;
 }
+#solo-seed-display {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+  color: var(--brand-fg-muted); text-align: center; margin-top: -6px;
+}
+#solo-seed-value { color: var(--brand-green); }
 #challenge-banner {
   font-family: var(--mono); font-size: 12px; line-height: 1.5;
   color: var(--brand-yellow); background: rgba(255,229,94,0.08);
@@ -460,6 +465,10 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
       <div id="solo-preview-wrap">
         <canvas id="solo-preview" width="640" height="120"></canvas>
       </div>
+      <!-- Shows the seed actually backing the preview above — random and
+           re-rolled on entry when the seed field is blank (see getSoloSeed()),
+           the typed custom seed otherwise. Kept in sync by updateSoloPreview(). -->
+      <div id="solo-seed-display">Seed: <span id="solo-seed-value"></span></div>
       <!-- Shown while a #challenge= link's seed/settings are loaded — see
            applyChallenge()/setChallengeLock(). Fields stay locked so the
            track can't be quietly loosened while keeping the shared seed. -->
@@ -1576,7 +1585,9 @@ function showMenuView(view) {
 // seed (getSoloSeed()) — so what's previewed is exactly what gets raced.
 function updateSoloPreview() {
   applyLobbyConfig(readLobbyConfig());
-  const obstacles = generateObstacles(getSoloSeed(), {
+  const seed = getSoloSeed();
+  $id('solo-seed-value').textContent = seed;
+  const obstacles = generateObstacles(seed, {
     totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
     finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
   });
