@@ -155,7 +155,7 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 #lobby hr { border: none; border-top: 1px solid var(--brand-border); margin: 4px 0; }
 /* Pre-existing gap: #btn-start/#btn-leave relied on a bare .hidden class that
    was never actually defined, so they always rendered regardless of state. */
-#btn-start.hidden, #btn-leave.hidden { display: none; }
+#btn-start.hidden, #btn-room-link.hidden, #btn-leave.hidden { display: none; }
 #lobby-status {
   font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
   color: var(--brand-fg-muted); min-height: 16px;
@@ -374,7 +374,7 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 #result-panel .r-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 #result-panel button.danger { color: var(--brand-red); border-color: var(--brand-border-strong); }
 #result-panel button.danger:hover { border-color: var(--brand-red); background: rgba(248,81,73,0.1); }
-#result-panel button.copied, #btn-challenge.copied { color: var(--brand-green); border-color: var(--brand-green); }
+#result-panel button.copied, #btn-challenge.copied, #btn-room-link.copied { color: var(--brand-green); border-color: var(--brand-green); }
 #result-rows { display: flex; flex-direction: column; gap: 6px; margin: 18px 0; text-align: left; }
 
 /* ── Leaderboards / result rows ────────────────────── */
@@ -553,6 +553,9 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
       <!-- Shown to the lobby host once 2+ players are in, so they can start the
            race before the lobby's join window elapses. -->
       <button id="btn-start" class="pill hidden">Start Match</button>
+      <!-- Copies a ?room=<id>(&ws=<url>) link so a friend can join this exact
+           room directly — see roomShareUrl()/wireRoomShareButton(). -->
+      <button id="btn-room-link" class="pill hidden">Copy room link</button>
       <button id="btn-leave" class="pill hidden">Leave Room</button>
     </div>
   </div>
@@ -1298,6 +1301,7 @@ function handleServerMsg(msg) {
       // If we're the host and the room was just created, show the auto-close timer.
       if (isHost && msg.soloAutocloseMs > 0) startSoloAutocloseCountdown(msg.soloAutocloseMs);
       $id('btn-leave').classList.remove('hidden');
+      $id('btn-room-link').classList.remove('hidden');
       break;
     case 'player-joined':
       setStatus(`${msg.players.length} player(s) ready`);
@@ -1391,6 +1395,7 @@ function handleServerMsg(msg) {
       myPlayerId = null;
       isHost     = false;
       $id('btn-leave').classList.add('hidden');
+      $id('btn-room-link').classList.add('hidden');
       break;
     case 'player-disconnected':
       if (!gameScene && msg.players) {
@@ -2032,6 +2037,23 @@ $id('btn-start').onclick = startMatch;
   };
 })();
 
+// "Copy room link": share a ?room=<id> link for the room this client is
+// currently in (reconnectRoomId is set on join / cleared on leave, see
+// joinMulti()/goHome()), so a friend can jump straight to entering their name
+// and joining the same open lobby instead of typing the room code by hand.
+(function wireRoomShareButton() {
+  const btn = $id('btn-room-link');
+  btn.onclick = async () => {
+    if (!reconnectRoomId) return;
+    const url = roomShareUrl(reconnectRoomId, $id('ws-url').value.trim());
+    const ok  = await copyToClipboard(url);
+    btn.textContent = ok ? 'Link copied' : 'Copy failed — see console';
+    btn.classList.toggle('copied', ok);
+    if (!ok) console.log('Room link:', url);
+    setTimeout(() => { btn.textContent = 'Copy room link'; btn.classList.remove('copied'); }, 2200);
+  };
+})();
+
 // ─── How-to-play modal ────────────────────────────────────────────────────────
 // The obstacle list is built from the same OBSTACLE_KINDS table + sprite drawers
 // the game uses, so the help screen can never drift from the real penalties.
@@ -2322,13 +2344,16 @@ $id('editor-modal').addEventListener('click', e => { if (e.target.id === 'editor
 //   #replay=<data>     portable solo replay, decoded + played locally (any instance)
 //   #challenge=<data>  Solo Race seed + track settings — see applyChallenge()
 //   ?replay=<raceId>   server-recorded race, streamed back via the watch handler
+//   ?room=<roomId>     multiplayer room invite — see applyRoomLink()
 loadServerConfig().then(() => {
   const soloRec = parseSoloReplayHash();
   if (soloRec) { $id('btn-home').classList.remove('hidden'); startLocalReplay(soloRec); return; }
   const challengeRec = parseChallengeHash();
   if (challengeRec) { applyChallenge(challengeRec); return; }
   const raceId = new URLSearchParams(location.search).get('replay');
-  if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); }
+  if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); return; }
+  const roomRec = parseRoomParams();
+  if (roomRec) { applyRoomLink(roomRec); }
 });
 
 // Build the shareable replay link for a race: this page's origin + ?replay=<id>.
@@ -2337,6 +2362,39 @@ function replayShareUrl(raceId) {
   u.search = ''; u.hash = '';
   u.searchParams.set('replay', raceId);
   return u.toString();
+}
+
+// ─── multiplayer room share links ─────────────────────────────────────────────
+// Unlike #challenge=/#replay= (which pack a whole track/race into the link so it
+// replays standalone), a room link is just an identifier — the friend still
+// joins the live lobby over the wire, same as typing the room code in by hand.
+// Format: ?room=<roomId>(&ws=<wsUrl>) — the ws param is only added when the
+// room lives on a non-default server (the #ws-url field was filled in).
+function roomShareUrl(roomId, wsUrl) {
+  const u = new URL(location.href);
+  u.hash = ''; u.search = '';
+  u.searchParams.set('room', roomId);
+  if (wsUrl) u.searchParams.set('ws', wsUrl);
+  return u.toString();
+}
+
+// Parse a ?room=<id>(&ws=<url>) link into { roomId, wsUrl }, or null if absent.
+function parseRoomParams() {
+  const sp = new URLSearchParams(location.search);
+  const roomId = sp.get('room');
+  if (!roomId) return null;
+  return { roomId, wsUrl: sp.get('ws') || '' };
+}
+
+// Apply a received room link: switch to the Multiplayer sub-view and pre-fill
+// the room code (+ server URL, if given) so the recipient just enters their
+// name and presses Join — mirroring room-browser row clicks (see fetchRooms()),
+// not an auto-join, so they still get a chance to pick their name/color first.
+function applyRoomLink(rec) {
+  showMenuView('multi');
+  $id('room-code').value = rec.roomId;
+  if (rec.wsUrl) $id('ws-url').value = rec.wsUrl;
+  $id('player-name').focus();
 }
 
 // Copy text to the clipboard, resolving true on success. Falls back to a hidden
