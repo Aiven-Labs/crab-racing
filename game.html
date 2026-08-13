@@ -90,7 +90,35 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
   background: #7CFC8E; border-color: #7CFC8E; color: #05080F;
 }
 #btn-solo:active, #btn-name-go:active, #result-panel button.primary:active { transform: translateY(1px); }
-#btn-daily, #btn-multi { border: 2px solid var(--brand-fg); }
+#btn-multi { border: 2px solid var(--brand-fg); }
+
+/* ── Main menu: mode cards ────────────────────────────── */
+#menu-main { display: flex; flex-direction: column; gap: 10px; }
+#menu-main.hidden { display: none; }
+.menu-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  text-align: left; width: 100%; cursor: pointer;
+  font-family: var(--sans); color: var(--brand-fg);
+  background: var(--brand-bg-card); border: 1px solid var(--brand-border);
+  border-radius: 12px; padding: 16px 18px;
+  transition: border-color 150ms ease-out, background 150ms ease-out;
+}
+.menu-card:hover, .menu-card:focus-visible { border-color: var(--brand-green); background: rgba(255,255,255,0.04); }
+.menu-card:focus-visible { outline: 3px solid rgba(95,250,116,0.25); outline-offset: 2px; }
+.menu-card:active { transform: translateY(1px); }
+.menu-card .mc-title {
+  font-family: var(--display); font-weight: 800; text-transform: uppercase;
+  font-size: 18px; letter-spacing: -0.01em; color: var(--brand-fg);
+}
+.menu-card .mc-desc { font-size: 13px; color: var(--brand-fg-muted); }
+#btn-menu-daily .mc-title { color: var(--brand-green); }
+
+/* ── Solo / Multiplayer sub-views ─────────────────────── */
+.menu-subview { display: flex; flex-direction: column; gap: 14px; text-align: left; }
+.menu-subview.hidden { display: none; }
+.menu-back {
+  width: auto; align-self: flex-start; padding: 8px 16px; font-size: 13px;
+}
 
 .field {
   background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
@@ -100,6 +128,9 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 .field::placeholder { color: var(--brand-fg-muted); }
 .field:focus { border-color: var(--brand-green); }
 #lobby hr { border: none; border-top: 1px solid var(--brand-border); margin: 4px 0; }
+/* Pre-existing gap: #btn-start/#btn-leave relied on a bare .hidden class that
+   was never actually defined, so they always rendered regardless of state. */
+#btn-start.hidden, #btn-leave.hidden { display: none; }
 #lobby-status {
   font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
   color: var(--brand-fg-muted); min-height: 16px;
@@ -187,12 +218,12 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
   cursor: pointer; padding: 4px; line-height: 1; border-radius: 4px;
 }
 #btn-editor-close:hover { color: var(--brand-fg); background: none; }
-#editor-preview-wrap {
+#editor-preview-wrap, #solo-preview-wrap {
   background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
   border-radius: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px;
   margin-bottom: 16px;
 }
-#editor-preview { display: block; image-rendering: pixelated; }
+#editor-preview, #solo-preview { display: block; image-rendering: pixelated; margin: 0 auto; }
 #editor-controls { display: flex; flex-direction: column; gap: 12px; }
 .ed-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ed-field label { font-family: var(--sans); font-size: 13px; color: var(--brand-fg-muted); flex: 1; }
@@ -318,7 +349,7 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 #result-panel .r-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 #result-panel button.danger { color: var(--brand-red); border-color: var(--brand-border-strong); }
 #result-panel button.danger:hover { border-color: var(--brand-red); background: rgba(248,81,73,0.1); }
-#result-panel button.copied { color: var(--brand-green); border-color: var(--brand-green); }
+#result-panel button.copied, #btn-challenge.copied { color: var(--brand-green); border-color: var(--brand-green); }
 #result-rows { display: flex; flex-direction: column; gap: 6px; margin: 18px 0; text-align: left; }
 
 /* ── Leaderboards / result rows ────────────────────── */
@@ -389,62 +420,96 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
     <button class="pill" id="btn-help">How to play</button>
     <!-- Pick your crab colour (solo). Swatches are built by buildColorPicker(). -->
     <div id="color-picker" title="Choose your crab"></div>
-    <details id="seed-section">
-      <summary>Use custom seed</summary>
-      <div class="seed-body">
-        <input class="field" id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
-      </div>
-    </details>
-    <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
-         Join (the room creator's settings fix the room, later joiners inherit). -->
-    <details id="track-settings">
-      <summary>Track settings</summary>
-      <div class="ts-body">
-        <div class="ts-field">
-          <label for="cfg-length">Track length</label>
-          <input class="field" id="cfg-length" type="number" min="10" max="200" placeholder="46">
-        </div>
-        <div class="ts-field">
-          <label for="cfg-density">Obstacle density</label>
-          <input class="field" id="cfg-density" type="number" min="0" max="1" step="0.01" placeholder="0.38">
-        </div>
-        <label>Obstacles</label>
-        <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
-        <!-- Opens the visual map editor (issue #84): same settings, plus zone
-             composition, as sliders/inputs with a live canvas preview. -->
-        <button class="pill" id="btn-open-editor" type="button">Open map editor</button>
-      </div>
-    </details>
-    <button class="pill" id="btn-solo">Solo Race</button>
-    <button class="pill" id="btn-daily">Daily challenge</button>
-    <hr>
-    <!-- Browse active public rooms. Fetches GET /rooms; clicking a row fills in
-         the room code. Refresh button reloads the list. -->
-    <details id="room-browser">
-      <summary>Browse Rooms</summary>
-      <div id="room-browser-body">
-        <div id="room-list-status">Loading rooms…</div>
-        <div id="room-list"></div>
-        <button class="pill" id="btn-refresh-rooms">Refresh</button>
-      </div>
-    </details>
-    <div id="multi-section">
-      <input class="field" id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
-      <input class="field" id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
-      <div class="lrow">
-        <input class="field" id="ws-url" placeholder="Server (blank = this site)">
-        <button class="pill" id="btn-multi">Join</button>
-      </div>
+
+    <!-- ── Main menu: three modes ─────────────────────── -->
+    <div id="menu-main">
+      <button class="menu-card" id="btn-daily" type="button">
+        <span class="mc-title">Daily challenge</span>
+        <span class="mc-desc">Today's track. Jump straight in and race the board.</span>
+      </button>
+      <button class="menu-card" id="btn-menu-solo" type="button">
+        <span class="mc-title">Solo race</span>
+        <span class="mc-desc">Tune track settings or open the map editor.</span>
+      </button>
+      <button class="menu-card" id="btn-menu-multi" type="button">
+        <span class="mc-title">Multiplayer</span>
+        <span class="mc-desc">Browse open rooms or create your own lobby.</span>
+      </button>
     </div>
-    <div id="lobby-status">Enter a name &amp; room, then Join</div>
-    <!-- Shown to the host when the room has only 1 player and the 30s auto-close
-         timer is running. Disappears once a second player arrives. -->
-    <div id="solo-autoclose-notice" class="hidden"></div>
-    <div id="player-list"></div>
-    <!-- Shown to the lobby host once 2+ players are in, so they can start the
-         race before the lobby's join window elapses. -->
-    <button id="btn-start" class="pill hidden">Start Match</button>
-    <button id="btn-leave" class="pill hidden">Leave Room</button>
+
+    <!-- ── Solo race: track settings + map editor ───────── -->
+    <div id="menu-solo" class="menu-subview hidden">
+      <button class="pill menu-back" id="btn-solo-back" type="button">‹ Back</button>
+      <!-- Live track preview: renders the actual race seed (getSoloSeed()) and
+           redraws on every track-settings change — see updateSoloPreview(). -->
+      <div id="solo-preview-wrap">
+        <canvas id="solo-preview" width="640" height="120"></canvas>
+      </div>
+      <details id="seed-section">
+        <summary>Use custom seed</summary>
+        <div class="seed-body">
+          <input class="field" id="seed-code" placeholder="Obstacle seed (blank = random)" maxlength="32">
+        </div>
+      </details>
+      <!-- Per-lobby track settings. Applied locally for Solo; sent to the server on
+           Join (the room creator's settings fix the room, later joiners inherit). -->
+      <details id="track-settings">
+        <summary>Track settings</summary>
+        <div class="ts-body">
+          <div class="ts-field">
+            <label for="cfg-length">Track length</label>
+            <input class="field" id="cfg-length" type="number" min="10" max="200" placeholder="46">
+          </div>
+          <div class="ts-field">
+            <label for="cfg-density">Obstacle density</label>
+            <input class="field" id="cfg-density" type="number" min="0" max="1" step="0.01" placeholder="0.38">
+          </div>
+          <label>Obstacles</label>
+          <div id="cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+          <!-- Opens the visual map editor (issue #84): same settings, plus zone
+               composition, as sliders/inputs with a live canvas preview. -->
+          <button class="pill" id="btn-open-editor" type="button">Open map editor</button>
+        </div>
+      </details>
+      <button class="pill primary" id="btn-solo">Start solo race</button>
+      <!-- Shares this exact seed + track settings so a friend can race the
+           identical track — see buildChallengeRecord()/challengeShareUrl(). -->
+      <button class="pill" id="btn-challenge" type="button">Challenge a friend</button>
+    </div>
+
+    <!-- ── Multiplayer: room browser + create/join lobby ─── -->
+    <div id="menu-multi" class="menu-subview hidden">
+      <button class="pill menu-back" id="btn-multi-back" type="button">‹ Back</button>
+      <!-- Browse active public rooms. Fetches GET /rooms; clicking a row fills in
+           the room code. Refresh button reloads the list. -->
+      <details id="room-browser">
+        <summary>Browse Rooms</summary>
+        <div id="room-browser-body">
+          <div id="room-list-status">Loading rooms…</div>
+          <div id="room-list"></div>
+          <button class="pill" id="btn-refresh-rooms">Refresh</button>
+        </div>
+      </details>
+      <hr>
+      <!-- Create or join a lobby. -->
+      <div id="multi-section">
+        <input class="field" id="player-name" placeholder="Your name"   value="Crab"  maxlength="16">
+        <input class="field" id="room-code"   placeholder="Room code"   value="room1" maxlength="24">
+        <div class="lrow">
+          <input class="field" id="ws-url" placeholder="Server (blank = this site)">
+          <button class="pill" id="btn-multi">Join</button>
+        </div>
+      </div>
+      <div id="lobby-status">Enter a name &amp; room, then Join</div>
+      <!-- Shown to the host when the room has only 1 player and the 30s auto-close
+           timer is running. Disappears once a second player arrives. -->
+      <div id="solo-autoclose-notice" class="hidden"></div>
+      <div id="player-list"></div>
+      <!-- Shown to the lobby host once 2+ players are in, so they can start the
+           race before the lobby's join window elapses. -->
+      <button id="btn-start" class="pill hidden">Start Match</button>
+      <button id="btn-leave" class="pill hidden">Leave Room</button>
+    </div>
   </div>
 </div>
 
@@ -563,6 +628,7 @@ let lobbyLocked  = false; // true once the lobby stops accepting new joiners
 let replayMode   = false; // true while watching a recorded race (spectator, no input)
 let currentRaceId = null;  // raceId of the race in progress (from 'go') — for share/replay
 let soloToken     = null;  // one-time token issued by GET /solo-token before each solo race
+let soloPreviewSeed = null; // seed backing the live #solo-preview track (cached — see getSoloSeed())
 let pendingSoloReplay = null; // solo replay record waiting for the scene to start it
 let dailyChallengeMode = false; // true while playing the daily challenge
 let dailyServerGhosts  = [];    // ghost records fetched from server for the daily challenge
@@ -1460,16 +1526,44 @@ function renderLeaderboard(board, currentPlayerName) {
   return html;
 }
 
-// Read the seed input: blank → random seed, otherwise the custom string.
-function readSeedInput() {
-  const raw = $id('seed-code').value.trim();
-  return raw || String(Math.floor(Math.random() * 0xffffffff));
+// The seed backing the solo race. A custom seed field wins outright; otherwise
+// a random seed is generated once and cached in soloPreviewSeed so the live
+// preview (see updateSoloPreview()) and the actual race use the same track —
+// re-rolled only when the player (re-)opens Solo Race, not on every keystroke.
+function getSoloSeed() {
+  const custom = $id('seed-code').value.trim();
+  if (custom) return custom;
+  if (soloPreviewSeed == null) soloPreviewSeed = String(Math.floor(Math.random() * 0xffffffff));
+  return soloPreviewSeed;
+}
+
+// ─── main menu navigation ──────────────────────────────────────────────────────
+// The lobby's top level is three mode cards (Daily / Solo / Multiplayer). Solo
+// and Multiplayer swap in a dedicated sub-view; Daily challenge has no sub-view —
+// clicking it starts the race immediately (see startDailyChallenge()).
+function showMenuView(view) {
+  $id('menu-main').classList.toggle('hidden', view !== 'main');
+  $id('menu-solo').classList.toggle('hidden', view !== 'solo');
+  $id('menu-multi').classList.toggle('hidden', view !== 'multi');
+}
+
+// Live preview shown in the Solo Race sub-view: applies the lobby's current
+// track-settings fields to the shared track globals (same globals startSolo()
+// itself applies at race time) and redraws #solo-preview from the real race
+// seed (getSoloSeed()) — so what's previewed is exactly what gets raced.
+function updateSoloPreview() {
+  applyLobbyConfig(readLobbyConfig());
+  const obstacles = generateObstacles(getSoloSeed(), {
+    totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
+    finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
+  });
+  drawTrackPreview('solo-preview', TRACK, LANES, obstacles);
 }
 
 async function startSolo() {
   saveNamePref(($id('player-name').value.trim() || 'Crab'));
   applyLobbyConfig(readLobbyConfig());   // custom lanes / length / obstacles
-  buildObstacles(readSeedInput());
+  buildObstacles(getSoloSeed());
   // Fetch a one-time race token from the server before starting. The token is
   // included in the POST /leaderboard body to prove the submission came from
   // a real race session. Fails open (token stays null) when the server is
@@ -1810,6 +1904,7 @@ function goHome() {
   if (location.search || location.hash) history.replaceState(null, '', location.pathname);
   $id('btn-home').classList.add('hidden');
   $id('lobby').classList.remove('hidden');
+  showMenuView('main'); // fully left the room/race — back to the mode-select menu
   $id('btn-start').classList.add('hidden');
   $id('btn-leave').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
@@ -1824,9 +1919,41 @@ $id('btn-home').onclick  = goHome;
 $id('btn-leave').onclick = goHome;
 $id('btn-daily').onclick = startDailyChallenge;
 
+$id('btn-menu-solo').onclick  = () => {
+  soloPreviewSeed = null; // fresh randomized map each time Solo Race is opened
+  showMenuView('solo');
+  updateSoloPreview();
+};
+$id('btn-menu-multi').onclick = () => showMenuView('multi');
+$id('btn-solo-back').onclick  = () => showMenuView('main');
+$id('btn-multi-back').onclick = () => showMenuView('main');
+
+// Redraw the Solo Race preview live as the track settings (or a custom seed)
+// change — #cfg-obstacles listens on the container since buildObstacleToggles()
+// rebuilds its checkboxes' innerHTML but never replaces the container itself.
+$id('cfg-length').addEventListener('input', updateSoloPreview);
+$id('cfg-density').addEventListener('input', updateSoloPreview);
+$id('cfg-obstacles').addEventListener('change', updateSoloPreview);
+$id('seed-code').addEventListener('input', updateSoloPreview);
+
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
 $id('btn-start').onclick = startMatch;
+
+// "Challenge a friend": copy a #challenge= link for the seed + track settings
+// currently shown in the Solo Race preview. Same copy-feedback pattern as the
+// post-race "Share replay" buttons (see r-share wiring further below).
+(function wireChallengeButton() {
+  const btn = $id('btn-challenge');
+  btn.onclick = async () => {
+    const url = challengeShareUrl(buildChallengeRecord());
+    const ok  = await copyToClipboard(url);
+    btn.textContent = ok ? 'Link copied' : 'Copy failed — see console';
+    btn.classList.toggle('copied', ok);
+    if (!ok) console.log('Challenge link:', url);
+    setTimeout(() => { btn.textContent = 'Challenge a friend'; btn.classList.remove('copied'); }, 2200);
+  };
+})();
 
 // ─── How-to-play modal ────────────────────────────────────────────────────────
 // The obstacle list is built from the same OBSTACLE_KINDS table + sprite drawers
@@ -2007,14 +2134,15 @@ function updateEditorPreview() {
     totalCells: TOTAL_CELLS, lanes: LANES, startCell: OBSTACLE_START_CELL,
     finishCell: FINISH_CELL, density: OBSTACLE_DENSITY, obstacleKinds: OBSTACLE_KINDS,
   });
-  drawEditorPreview(TRACK, LANES, obstacles);
+  drawTrackPreview('editor-preview', TRACK, LANES, obstacles);
 }
 
-// Render the track preview into #editor-preview. Cell size shrinks to fit a
-// ~640px-wide canvas (clamped so very long/short tracks stay legible); the
-// wrapper scrolls horizontally for anything wider than that.
-function drawEditorPreview(track, lanes, obstacles) {
-  const canvas = $id('editor-preview');
+// Render a track preview into the canvas with id `canvasId` (shared by the map
+// editor's #editor-preview and the solo lobby's #solo-preview). Cell size
+// shrinks to fit a ~640px-wide canvas (clamped so very long/short tracks stay
+// legible); the wrapper scrolls horizontally for anything wider than that.
+function drawTrackPreview(canvasId, track, lanes, obstacles) {
+  const canvas = $id(canvasId);
   const totalCells = Math.max(1, track.length);
   let cellPx = Math.floor(640 / totalCells);
   cellPx = Math.max(4, Math.min(20, cellPx));
@@ -2093,6 +2221,7 @@ function useEditorTrack() {
   });
 
   closeMapEditor(true);
+  updateSoloPreview(); // reflect the edited track in the Solo Race preview
 }
 
 $id('btn-open-editor').onclick   = openMapEditor;
@@ -2110,13 +2239,17 @@ $id('editor-obstacles').addEventListener('change', updateEditorPreview);
 // Click the dim backdrop (but not the panel) to cancel, matching the help modal.
 $id('editor-modal').addEventListener('click', e => { if (e.target.id === 'editor-modal') closeMapEditor(false); });
 
-// Load server config, then — if opened with a replay share link — jump straight
-// into the replay instead of the lobby. Two link forms:
-//   #replay=<data>    portable solo replay, decoded + played locally (any instance)
-//   ?replay=<raceId>  server-recorded race, streamed back via the watch handler
+// Load server config, then — if opened with a replay OR challenge share link —
+// jump straight into the replay, or land in Solo Race pre-loaded with the
+// challenger's track, instead of the plain lobby. Three link forms:
+//   #replay=<data>     portable solo replay, decoded + played locally (any instance)
+//   #challenge=<data>  Solo Race seed + track settings — see applyChallenge()
+//   ?replay=<raceId>   server-recorded race, streamed back via the watch handler
 loadServerConfig().then(() => {
   const soloRec = parseSoloReplayHash();
   if (soloRec) { $id('btn-home').classList.remove('hidden'); startLocalReplay(soloRec); return; }
+  const challengeRec = parseChallengeHash();
+  if (challengeRec) { applyChallenge(challengeRec); return; }
   const raceId = new URLSearchParams(location.search).get('replay');
   if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); }
 });
@@ -2211,6 +2344,71 @@ function parseSoloReplayHash() {
     if (rec && Array.isArray(rec.moves) && rec.config) return rec;
   } catch { /* malformed link */ }
   return null;
+}
+
+// ─── "Challenge a friend" links ─────────────────────────────────────────────────
+// Like a solo replay link, but shared BEFORE racing: just the seed + track
+// settings (no moves/finish time), so a friend races the identical track from
+// scratch rather than watching a recording. Lives in the hash under its own
+// #challenge= key so it never collides with #replay= links.
+const CHALLENGE_RECORD_VERSION = 1;
+
+// Build the current Solo Race setup into a portable record.
+function buildChallengeRecord() {
+  applyLobbyConfig(readLobbyConfig()); // make sure the globals match the visible fields
+  return {
+    v: CHALLENGE_RECORD_VERSION,
+    seed: getSoloSeed(),
+    config: {
+      lanes: LANES, zones: ZONES, obstacleKinds: OBSTACLE_KINDS,
+      obstacleStartCell: OBSTACLE_START_CELL, obstacleDensity: OBSTACLE_DENSITY,
+    },
+  };
+}
+
+function challengeShareUrl(record) {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = 'challenge=' + b64urlEncode(JSON.stringify(record));
+  return u.toString();
+}
+
+// Parse a #challenge=<data> hash into a record, or null if absent/malformed.
+function parseChallengeHash() {
+  const h = location.hash.replace(/^#/, '');
+  const m = /(?:^|&)challenge=([^&]+)/.exec(h);
+  if (!m) return null;
+  try {
+    const rec = JSON.parse(b64urlDecode(m[1]));
+    if (rec && rec.config) return rec;
+  } catch { /* malformed link */ }
+  return null;
+}
+
+// Apply a received challenge: load its seed + track settings into the Solo
+// Race view (mirroring them into the visible fields, same write-back
+// useEditorTrack() does after the map editor) so the recipient can preview,
+// then race, the exact track that was shared.
+function applyChallenge(rec) {
+  applyGameConfig(rec.config);
+  $id('seed-code').value = rec.seed != null ? String(rec.seed) : '';
+  soloPreviewSeed = null; // the seed field just set above wins via getSoloSeed()
+
+  $id('cfg-length').value  = String(TOTAL_CELLS);
+  $id('cfg-density').value = String(Math.round(OBSTACLE_DENSITY * 100) / 100);
+  buildObstacleToggles();
+  ALL_OBSTACLE_KINDS.forEach(k => {
+    const box = $id('cfg-ob-' + k.type);
+    if (box) box.checked = OBSTACLE_KINDS.some(ok => ok.type === k.type);
+  });
+
+  // Open both panels so it's obvious a challenge's seed/settings are active,
+  // rather than the usual "blank = random" defaults.
+  $id('seed-section').open   = true;
+  $id('track-settings').open = true;
+
+  showMenuView('solo');
+  updateSoloPreview();
 }
 
 // ─── best-run "ghost" store ────────────────────────────────────────────────────
