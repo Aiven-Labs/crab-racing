@@ -2353,17 +2353,26 @@ function parseSoloReplayHash() {
 // #challenge= key so it never collides with #replay= links.
 const CHALLENGE_RECORD_VERSION = 1;
 
-// Build the current Solo Race setup into a portable record.
-function buildChallengeRecord() {
-  applyLobbyConfig(readLobbyConfig()); // make sure the globals match the visible fields
+// Build a challenge record for `seed` from the current track globals
+// (LANES/ZONES/OBSTACLE_KINDS/etc) — shared by the Solo Race lobby's
+// "Challenge a friend" button (globals synced from the visible fields first,
+// see buildChallengeRecord()) and the post-race result panel's (globals are
+// already the track that was just raced/watched; seed is that race's raceSeed).
+function buildChallengeRecordFor(seed) {
   return {
     v: CHALLENGE_RECORD_VERSION,
-    seed: getSoloSeed(),
+    seed: String(seed),
     config: {
       lanes: LANES, zones: ZONES, obstacleKinds: OBSTACLE_KINDS,
       obstacleStartCell: OBSTACLE_START_CELL, obstacleDensity: OBSTACLE_DENSITY,
     },
   };
+}
+
+// Build the current Solo Race lobby setup into a portable record.
+function buildChallengeRecord() {
+  applyLobbyConfig(readLobbyConfig()); // make sure the globals match the visible fields
+  return buildChallengeRecordFor(getSoloSeed());
 }
 
 function challengeShareUrl(record) {
@@ -3264,7 +3273,10 @@ class RaceScene extends Phaser.Scene {
     // Placeholder replaced async once submitScore resolves.
     if (!watching) html += `<div id="r-lb"></div>`;
 
-    html += `<div class="r-actions">${watching ? '' : `<button id="r-share">Share replay</button>`}</div>`;
+    html += `<div class="r-actions">`;
+    if (!watching) html += `<button id="r-share">Share replay</button>`;
+    html += `<button id="r-challenge">Challenge a friend</button>`;
+    html += `</div>`;
     html += `<div class="r-hint">${watching ? 'tap Home' : 'tap anywhere or press space to race again · Home'}</div>`;
     showResultPanel(html);
 
@@ -3280,6 +3292,21 @@ class RaceScene extends Phaser.Scene {
         shareBtn.classList.toggle('copied', ok);
         if (!ok) console.log('Replay link:', url);
         setTimeout(() => { shareBtn.textContent = 'Share replay'; shareBtn.classList.remove('copied'); }, 2200);
+      };
+    }
+
+    // Challenge-a-friend button: shares just the seed + track settings (no
+    // moves/finish time) so a friend races the same track fresh, live or from
+    // a watched replay alike — see buildChallengeRecordFor()/challengeShareUrl().
+    {
+      const challengeBtn = $id('r-challenge');
+      challengeBtn.onclick = async () => {
+        const url = challengeShareUrl(buildChallengeRecordFor(raceSeed));
+        const ok = await copyToClipboard(url);
+        challengeBtn.textContent = ok ? 'Link copied' : 'Copy failed — see console';
+        challengeBtn.classList.toggle('copied', ok);
+        if (!ok) console.log('Challenge link:', url);
+        setTimeout(() => { challengeBtn.textContent = 'Challenge a friend'; challengeBtn.classList.remove('copied'); }, 2200);
       };
     }
 
