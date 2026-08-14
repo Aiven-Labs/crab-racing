@@ -1422,8 +1422,12 @@ function handleServerMsg(msg) {
       if (msg.seed != null) buildObstacles(msg.seed);
       if (msg.raceInProgress && gameScene) {
         // The race is still going — push the current player positions so the
-        // local simulation re-syncs after the gap.
-        gameScene.applyServerState(msg.players, null, null);
+        // local simulation re-syncs after the gap. forceSyncSelf:true because
+        // this snapshot is the authoritative catch-up after a disconnect, not
+        // a routine broadcast triggered by someone else's move — see
+        // applyServerState's comment on why those two cases are treated
+        // differently for the local player.
+        gameScene.applyServerState(msg.players, null, null, true);
         if (gameScene.statusText) gameScene.statusText.setText('');
         setStatus('Reconnected');
       } else if (!msg.raceInProgress) {
@@ -3005,43 +3009,61 @@ class RaceScene extends Phaser.Scene {
     if (this.busy || this.won) return;
     if (replayMode) return; // spectating a recording — input does nothing
 
-    // MULTIPLAYER: send to server and apply optimistic prediction locally
+    // MULTIPLAYER: send to server; resolve plain moves locally-authoritative
+    // (same as solo) so back-to-back taps chain instantly instead of each
+    // one waiting out a network round trip. Stun/push are the exception —
+    // those still wait on the server's confirmation below, since predicting
+    // their turn-counts/pushback client-side would let a player who never
+    // hears the correction just tap through the penalty.
     if (multiMode) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'move', dx, dlane }));
       }
-      // Lock busy immediately to stop key-repeat from flooding the server.
-      // Cleared when applyServerState confirms our move, or by fallback timer.
-      this.busy = true;
-      this.time.delayedCall(250, () => { if (!this.won) this.busy = false; });
 
-      // Optimistic prediction: move the sprite immediately so input feels
-      // instant. Only predict when not stunned and the move is locally valid
-      // (in-bounds and not a block obstacle). Push / stun effects will be
-      // corrected by applyServerState when the authoritative state arrives.
-      if (this.stunTurns <= 0) {
-        const nc = this.cell + dx;
-        const nl = this.lane + dlane;
-        if (nc >= 0 && nc < TOTAL_CELLS && nl >= 0 && nl < LANES) {
-          const obs = OBS_MAP.get(`${nc},${nl}`);
-          if (!obs || obs.effect !== 'block') {
-            const spr = this.crab;
-            const lbl = this.playerLabels?.get(myPlayerId);
-            const tx  = nc * CELLR + CELLR / 2;
-            const ty  = this.trackTop + nl * CELLR + CELLR / 2;
-            this.tweens.killTweensOf(spr);
-            if (dx !== 0) spr.play('walk_' + (this.myMultiColorIdx | 0), true);
-            this.tweens.add({
-              targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
-              onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
-              onComplete: () => {
-                lbl?.setPosition(tx, ty - 10 * RES);
-                spr.stop?.(); spr.setFrame?.(0);
-              },
-            });
-          }
-        }
+      // Already stunned: nothing to predict, just wait for the server's
+      // stun-turn countdown to come back (same pacing as before this change).
+      if (this.stunTurns > 0) {
+        this.busy = true;
+        this.time.delayedCall(250, () => { if (!this.won) this.busy = false; });
+        return;
       }
+
+      const nc = this.cell + dx;
+      const nl = this.lane + dlane;
+      if (nc < 0 || nc >= TOTAL_CELLS || nl < 0 || nl >= LANES) return; // out of bounds — no-op, stays free to move
+
+      const obs = OBS_MAP.get(`${nc},${nl}`);
+      if (obs?.effect === 'block') return; // blocked — no-op, same as solo
+
+      if (obs?.effect === 'stun' || obs?.effect === 'push') {
+        // Land on a stun/push cell: lock until the server tells us exactly
+        // how many turns / how far back, instead of guessing.
+        this.busy = true;
+        this.time.delayedCall(250, () => { if (!this.won) this.busy = false; });
+        return;
+      }
+
+      // Plain move: commit the new cell/lane right now, exactly like solo's
+      // _soloStep, so the very next tap predicts from here rather than a
+      // stale, unconfirmed position. applyServerState reconciles silently if
+      // the server ever disagrees (it shouldn't, for a plain move).
+      this.cell = nc;
+      this.lane = nl;
+
+      const spr = this.crab;
+      const lbl = this.playerLabels?.get(myPlayerId);
+      const tx  = nc * CELLR + CELLR / 2;
+      const ty  = this.trackTop + nl * CELLR + CELLR / 2;
+      this.tweens.killTweensOf(spr);
+      if (dx !== 0) spr.play('walk_' + (this.myMultiColorIdx | 0), true);
+      this.tweens.add({
+        targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
+        onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
+        onComplete: () => {
+          lbl?.setPosition(tx, ty - 10 * RES);
+          spr.stop?.(); spr.setFrame?.(0);
+        },
+      });
       return;
     }
 
@@ -3227,12 +3249,26 @@ class RaceScene extends Phaser.Scene {
   }
 
   // ── applyServerState ────────────────────────────────────────────────────────
-  // Called by handleServerMsg when server broadcasts updated game state
-  applyServerState(players, result, movedId) {
+  // Called by handleServerMsg when server broadcasts updated game state.
+  // forceSyncSelf: true for an authoritative catch-up snapshot (e.g. after a
+  // reconnect) that must reposition the local player too, as opposed to a
+  // routine per-move broadcast — see the comment below on why those differ.
+  applyServerState(players, result, movedId, forceSyncSelf = false) {
     for (const p of players) {
       const spr = this.playerCrabs?.get(p.id);
       const lbl = this.playerLabels?.get(p.id);
       if (!spr) continue;
+
+      // A broadcast triggered by someone ELSE's move still carries a snapshot
+      // of my own last-known-to-the-server cell/lane — which can already be
+      // stale, since plain moves now resolve locally the instant they're sent
+      // (see move()) rather than waiting for this same round trip. Applying
+      // it here would roll my crab back to that stale spot until my own
+      // move's confirmation arrives a moment later. applyMove only ever
+      // mutates the mover's own record (no cross-player effects), so it's
+      // safe to just skip reconciling myself except on my own confirmation
+      // (or an explicit forced resync, e.g. post-reconnect catch-up).
+      if (p.id === myPlayerId && movedId !== myPlayerId && !forceSyncSelf) continue;
 
       const tx = p.cell * CELLR + CELLR/2;
       const ty = this.trackTop + p.lane * CELLR + CELLR/2;
