@@ -2,9 +2,13 @@
  * Crab Racing — multiplayer server
  *
  * Architecture:
- *   Browser  ──WebSocket──►  server.js  ──produce──►  Kafka topic "race-moves"
- *                                              ◄──consume──
- *                         server applies move, broadcasts updated state to all WS clients
+ *   Browser  ──WebSocket──►  server.js: applies the move in-process and
+ *                             broadcasts updated state to all WS clients immediately.
+ *                             Every move is ALSO produced (fire-and-forget) to the
+ *                             Kafka topic "race-moves" as a durable, replayable log —
+ *                             see loadRaceFromKafka()/playRace() — but Kafka is off
+ *                             the critical path for live gameplay, so round-trip
+ *                             broker latency never gates a player's own input.
  *
  * Start: node server.js
  * Env:   see .env.example
@@ -64,7 +68,7 @@ async function getSoloToken(req, res) {
 /** POST /leaderboard body: { name, timeCs, token } → validates solo race token,
  *  records score, returns board. The token field is required for solo races and
  *  must be a value minted by GET /solo-token for this session (single-use).
- *  Multiplayer scores are recorded server-side via the Kafka consumer; this
+ *  Multiplayer scores are recorded server-side from applyAndBroadcastMove; this
  *  endpoint is solo-only. */
 function postLeaderboard(req, res) {
   let raw = '';
@@ -189,7 +193,7 @@ function serveStatic(req, res) {
   }
 
   // Leaderboard API — GET reads the board, POST records a finish (solo only;
-  // multiplayer finishes are recorded server-side via the Kafka consumer).
+  // multiplayer finishes are recorded server-side from applyAndBroadcastMove).
   // The board is per-seed: GET requires ?seed= and returns only scores from
   // that obstacle layout. Omitting seed returns 400 — mixing seeds would make
   // times meaningless (different tracks = different difficulty).
@@ -1319,78 +1323,70 @@ async function main() {
   }
   await admin.disconnect();
 
-  // Producer: publishes move events
+  // Producer: publishes move events. Fire-and-forget from the WS handler below
+  // (see applyAndBroadcastMove/the 'move' case) — durable logging for replay,
+  // never awaited on the live-gameplay critical path.
   const producer = kafka.producer();
   await producer.connect();
   console.log('✓ Kafka producer connected');
 
-  // Consumer: unique group ID so this server instance gets every message.
-  // fromBeginning:false means we only process events produced after startup
-  // (no replaying finished races on restart).
-  const consumer = kafka.consumer({ groupId: `crab-srv-${Date.now()}` });
-  await consumer.connect();
-  await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+  // Apply a move to room state and broadcast the result to the room. Called
+  // synchronously and immediately from the WS 'move' handler — moves used to
+  // be produced to Kafka and only applied/broadcast when the consumer read them
+  // back, which put a full produce→broker-ack→consume round trip on the path
+  // of every player's own input (compounding with the client's 250ms busy-flag
+  // fallback in game.html's move() to cap real-world input well below what
+  // solo mode allows). Applying in-process removes that round trip entirely;
+  // Kafka still receives every move (see the 'move' case below) purely as a
+  // durable, replayable log.
+  function applyAndBroadcastMove(room, roomId, playerId, dx, dlane, raceId) {
+    const result = applyMove(room, playerId, dx, dlane);
+    if (!result.ok && result.effect !== 'block') return result; // truly invalid — skip
 
-  await consumer.run({
-    eachMessage: async ({ message }) => {
-      let event;
-      try { event = JSON.parse(message.value.toString()); }
-      catch { return; }
+    // Buffer the applied move for replay: only moves belonging to the room's
+    // current race, with an offset from the race start so playback can honour
+    // the original cadence. This is the exact input stream replay re-applies.
+    // When a move causes a finish, record the authoritative finishTimeCs on it
+    // so replay reports the exact recorded time rather than one recomputed from
+    // a reconstructed clock (which could round differently at a cs boundary).
+    if (raceId && raceId === room.raceId) {
+      const rec = {
+        playerId, dx, dlane,
+        t: room.startedAt ? Date.now() - room.startedAt : 0,
+      };
+      if (result.won && result.finishTimeCs != null) rec.finishTimeCs = result.finishTimeCs;
+      room.moves.push(rec);
+    }
 
-      if (event.action !== 'move') return;
+    // Broadcast updated state + result to everyone in the room
+    broadcast(roomId, {
+      type:    'state',
+      players: snapshot(room),
+      result,
+      movedId: playerId,
+    });
 
-      const room = rooms.get(event.roomId);
-      if (!room) return;
-
-      const result = applyMove(room, event.playerId, event.dx, event.dlane);
-      if (!result.ok && result.effect !== 'block') return; // truly invalid — skip
-
-      // Buffer the applied move for replay: only moves belonging to the room's
-      // current race, with an offset from the race start so playback can honour
-      // the original cadence. This is the exact input stream replay re-applies.
-      // When a move causes a finish, record the authoritative finishTimeCs on it
-      // so replay reports the exact recorded time rather than one recomputed from
-      // a reconstructed clock (which could round differently at a cs boundary).
-      if (event.raceId && event.raceId === room.raceId) {
-        const rec = {
-          playerId: event.playerId,
-          dx: event.dx, dlane: event.dlane,
-          t: room.startedAt ? Date.now() - room.startedAt : 0,
-        };
-        if (result.won && result.finishTimeCs != null) rec.finishTimeCs = result.finishTimeCs;
-        room.moves.push(rec);
-      }
-
-      // Broadcast updated state + result to everyone in the room
-      broadcast(event.roomId, {
-        type:     'state',
-        players:  snapshot(room),
-        result,
-        movedId:  event.playerId,
+    // Announce each crab as it finishes (the race keeps going for the rest).
+    if (result.won && result.place != null) {
+      const p = room.players.get(playerId);
+      broadcast(roomId, {
+        type:         'finish',
+        playerId,
+        name:         p?.name ?? '?',
+        place:        result.place,
+        finishTimeCs: result.finishTimeCs,
       });
-
-      // Announce each crab as it finishes (the race keeps going for the rest).
-      if (result.won && result.place != null) {
-        const p = room.players.get(event.playerId);
-        broadcast(event.roomId, {
-          type:         'finish',
-          playerId:     event.playerId,
-          name:         p?.name ?? '?',
-          place:        result.place,
-          finishTimeCs: result.finishTimeCs,
-        });
-        // Record this finish on the leaderboard. startedAt is guaranteed by
-        // applyMove (it guards on it before awarding a win); the extra check
-        // here is defensive. Fire-and-forget — same pattern as saveRace — so
-        // a Valkey hiccup never blocks the Kafka consumer loop.
-        if (p && room.startedAt && result.finishTimeCs != null) {
-          recordScore(p.name, result.finishTimeCs, p.colorIdx, room.seed, room.raceId, p.id);
-        }
-        onFinish(room, event.roomId);
+      // Record this finish on the leaderboard. startedAt is guaranteed by
+      // applyMove (it guards on it before awarding a win); the extra check
+      // here is defensive. Fire-and-forget — same pattern as saveRace — so
+      // a Valkey hiccup never blocks the caller.
+      if (p && room.startedAt && result.finishTimeCs != null) {
+        recordScore(p.name, result.finishTimeCs, p.colorIdx, room.seed, room.raceId, p.id);
       }
-    },
-  });
-  console.log('✓ Kafka consumer listening');
+      onFinish(room, roomId);
+    }
+    return result;
+  }
 
   // ── HTTP + WebSocket server ────────────────────────────────────────────────────
   const server = http.createServer(serveStatic);
@@ -1541,10 +1537,17 @@ async function main() {
           return;
         }
 
+        // Apply the move and broadcast the result to the room right now — see
+        // applyAndBroadcastMove's comment for why this is no longer routed
+        // through Kafka first.
+        applyAndBroadcastMove(room, info.roomId, info.playerId, dx, dlane, room.raceId);
+
         // Publish to Kafka keyed on raceId so all of one race's moves share a
         // partition (→ total order for that race) and consecutive races in the
         // same room stay separable. raceId also rides in the value for replay.
-        await producer.send({
+        // Fire-and-forget: this is a durable log for loadRaceFromKafka/replay,
+        // not on the live-gameplay critical path above.
+        producer.send({
           topic: TOPIC,
           messages: [{
             key:   room.raceId,
