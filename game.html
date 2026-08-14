@@ -3270,16 +3270,33 @@ class RaceScene extends Phaser.Scene {
       // (or an explicit forced resync, e.g. post-reconnect catch-up).
       if (p.id === myPlayerId && movedId !== myPlayerId && !forceSyncSelf) continue;
 
-      const tx = p.cell * CELLR + CELLR/2;
-      const ty = this.trackTop + p.lane * CELLR + CELLR/2;
+      // A plain move's own confirmation doesn't need a reconciliation tween:
+      // move()'s local prediction already started the exact same 150ms tween
+      // to the exact same cell/lane the instant the key was pressed (same
+      // deterministic obstacle map, so it can't disagree). Now that the
+      // server round trip is fast, this confirmation typically arrives WHILE
+      // that tween is still mid-flight — killing and restarting it here on
+      // every single move is what was still reading as jank/stutter. Stun and
+      // push outcomes skip this: move() never predicts those locally (it
+      // waits on the server for exact turn-count/pushback), so there's no
+      // existing tween to trust and this is the only thing that animates them.
+      // The reconnect catch-up (forceSyncSelf) also has no local tween to
+      // trust, so it always reconciles for real.
+      const trustLocalTween = p.id === myPlayerId && movedId === myPlayerId
+        && !forceSyncSelf && (!result || result.effect == null);
 
-      if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
-        this.tweens.killTweensOf(spr);
-        this.tweens.add({
-          targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
-          onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
-          onComplete: () => lbl?.setPosition(tx, ty - 10 * RES),
-        });
+      if (!trustLocalTween) {
+        const tx = p.cell * CELLR + CELLR/2;
+        const ty = this.trackTop + p.lane * CELLR + CELLR/2;
+
+        if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
+          this.tweens.killTweensOf(spr);
+          this.tweens.add({
+            targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
+            onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
+            onComplete: () => lbl?.setPosition(tx, ty - 10 * RES),
+          });
+        }
       }
 
       this.setDizzy(spr, (p.stunTurns ?? 0) > 0);
