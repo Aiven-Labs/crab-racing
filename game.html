@@ -243,12 +243,12 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
   cursor: pointer; padding: 4px; line-height: 1; border-radius: 4px;
 }
 #btn-editor-close:hover { color: var(--brand-fg); background: none; }
-#editor-preview-wrap, #solo-preview-wrap {
+#editor-preview-wrap, #solo-preview-wrap, #mp-preview-wrap {
   background: var(--brand-bg-elev); border: 1px solid var(--brand-border);
   border-radius: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px;
   margin-bottom: 16px;
 }
-#editor-preview, #solo-preview { display: block; image-rendering: pixelated; margin: 0 auto; }
+#editor-preview, #solo-preview, #mp-preview { display: block; image-rendering: pixelated; margin: 0 auto; }
 #editor-controls { display: flex; flex-direction: column; gap: 12px; }
 .ed-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ed-field label { font-family: var(--sans); font-size: 13px; color: var(--brand-fg-muted); flex: 1; }
@@ -550,28 +550,42 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
            timer is running. Disappears once a second player arrives. -->
       <div id="solo-autoclose-notice" class="hidden"></div>
       <div id="player-list"></div>
-      <!-- Race settings for the room, shown once you're in a lobby (see 'joined').
-           The host can edit track length + which obstacles appear and push the
-           change to everyone with "Update settings"; other players see the same
-           panel read-only. No density field here — buildRoomConfig() never
-           accepts a density override server-side (solo/local-only tunable), so
-           it's excluded rather than shown but silently ignored. Reuses
+      <!-- Room race panel: shown to everyone once in a lobby (see 'joined').
+           The live preview always reflects the room's actual current track —
+           every player can see it. The "Race settings" section below it is the
+           same track-settings idea as Solo (seed / length / obstacles), but only
+           the host can edit it; other players see the fields disabled. Editing
+           doesn't apply until the host clicks "Update settings", which the
+           server re-clamps and rebroadcasts to everyone (see 'config-updated').
+           No density field here — buildRoomConfig() never accepts a density
+           override server-side (solo/local-only tunable). Reuses
            buildObstacleToggles()'s idPrefix support, mirroring the map editor's
            'ed' prefix — see readMultiConfig()/syncMultiSettingsPanel(). -->
-      <details id="mp-track-settings" class="hidden">
-        <summary>Race settings</summary>
-        <div class="ts-body">
-          <div class="ts-field">
-            <label for="mp-cfg-length">Track length</label>
-            <input class="field" id="mp-cfg-length" type="number" min="10" max="200">
-          </div>
-          <label>Obstacles</label>
-          <div id="mp-cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
-          <!-- Host-only: pushes the panel's current values to the room. Hidden
-               for non-hosts and while the lobby is locked/racing. -->
-          <button class="pill hidden" id="btn-update-settings" type="button">Update settings</button>
+      <div id="mp-race-panel" class="hidden">
+        <div id="mp-preview-wrap">
+          <canvas id="mp-preview" width="640" height="120"></canvas>
         </div>
-      </details>
+        <details id="mp-track-settings">
+          <summary>Race settings</summary>
+          <div class="ts-body">
+            <div class="ts-field">
+              <label for="mp-cfg-seed">Seed</label>
+              <input class="field" id="mp-cfg-seed" placeholder="(random)" maxlength="32">
+            </div>
+            <div class="ts-field">
+              <label for="mp-cfg-length">Track length</label>
+              <input class="field" id="mp-cfg-length" type="number" min="10" max="200">
+            </div>
+            <label>Obstacles</label>
+            <div id="mp-cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+            <!-- Host-only: pushes the panel's current values to the room. Hidden
+                 for non-hosts and while the lobby is locked/racing. Clearing the
+                 seed field before clicking this re-rolls a random track, same as
+                 leaving Solo's seed field blank. -->
+            <button class="pill hidden" id="btn-update-settings" type="button">Update settings</button>
+          </div>
+        </details>
+      </div>
       <!-- Shown to the lobby host once 2+ players are in, so they can start the
            race before the lobby's join window elapses. -->
       <button id="btn-start" class="pill hidden">Start Match</button>
@@ -1120,12 +1134,22 @@ function readMultiConfig() {
   return cfg;
 }
 
-// Populate the multiplayer race-settings panel from the room's currently-active
-// config (globals already updated by applyGameConfig()), and refresh who's
-// allowed to edit it. Called after 'joined' / 'config-updated' / 'room-reset',
-// and after any host handoff — every player always sees the room's real
-// settings, but only the host can change them.
+// Redraw the room's live track preview (#mp-preview) from the race-authoritative
+// globals buildObstacles() just filled in — TRACK/LANES/OBSTACLES already match
+// exactly what the server built for this room (same seed, same clamped config),
+// so this is a straight repaint, no separate local generation needed.
+function updateMpPreview() {
+  drawTrackPreview('mp-preview', TRACK, LANES, OBSTACLES);
+}
+
+// Populate the multiplayer race-settings panel (seed / length / obstacles) and
+// preview from the room's currently-active config (globals already updated by
+// applyGameConfig()+buildObstacles()), and refresh who's allowed to edit it.
+// Called after 'joined' / 'config-updated' / 'room-reset' / 'reconnected', and
+// after any host handoff — every player always sees the room's real settings
+// and map, but only the host can change them.
 function syncMultiSettingsPanel() {
+  $id('mp-cfg-seed').value = raceSeed != null ? String(raceSeed) : '';
   $id('mp-cfg-length').value = String(TOTAL_CELLS);
   const active = new Set(OBSTACLE_KINDS.map(k => k.type));
   buildObstacleToggles('mp-cfg-obstacles', 'mp-cfg');
@@ -1133,15 +1157,17 @@ function syncMultiSettingsPanel() {
     const box = $id('mp-cfg-ob-' + k.type);
     if (box) box.checked = active.has(k.type);
   });
+  updateMpPreview();
   updateMultiSettingsAccess();
 }
 
-// Reveal/lock the settings panel: visible to everyone once in a lobby, but only
-// editable by the host, and only while the lobby is still open (not locked /
-// counting down / racing).
+// Reveal/lock the race panel: the preview + settings are visible to everyone
+// once in a lobby, but the settings fields are only editable by the host, and
+// only while the lobby is still open (not locked / counting down / racing).
 function updateMultiSettingsAccess() {
-  $id('mp-track-settings').classList.remove('hidden');
+  $id('mp-race-panel').classList.remove('hidden');
   const editable = isHost && !lobbyLocked;
+  $id('mp-cfg-seed').disabled = !editable;
   $id('mp-cfg-length').disabled = !editable;
   $id('mp-cfg-obstacles').querySelectorAll('input').forEach(b => { b.disabled = !editable; });
   $id('btn-update-settings').classList.toggle('hidden', !editable);
@@ -1150,10 +1176,13 @@ function updateMultiSettingsAccess() {
 // Host clicked "Update settings" — push the panel's current values to the room.
 // The server re-clamps/filters them exactly like room creation and rebroadcasts
 // the result (see 'config-updated'), so every player (including us) ends up in
-// sync even if the server had to adjust something we sent.
+// sync even if the server had to adjust something we sent. A blank seed field
+// asks the server for a fresh random seed (re-rolling the track), same as
+// leaving Solo's seed field blank — see getSoloSeed().
 function updateMultiSettings() {
   if (!ws || ws.readyState !== WebSocket.OPEN || !isHost) return;
-  ws.send(JSON.stringify({ type: 'update-config', config: readMultiConfig() }));
+  const seedRaw = $id('mp-cfg-seed').value.trim();
+  ws.send(JSON.stringify({ type: 'update-config', config: readMultiConfig(), seed: seedRaw || undefined }));
 }
 
 const OBSTACLE_LABELS = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
@@ -1485,7 +1514,7 @@ function handleServerMsg(msg) {
       isHost     = false;
       $id('btn-leave').classList.add('hidden');
       $id('btn-room-link').classList.add('hidden');
-      $id('mp-track-settings').classList.add('hidden');
+      $id('mp-race-panel').classList.add('hidden');
       break;
     case 'player-disconnected':
       if (!gameScene && msg.players) {
@@ -2079,7 +2108,7 @@ function goHome() {
   showMenuView('main'); // fully left the room/race — back to the mode-select menu
   $id('btn-start').classList.add('hidden');
   $id('btn-leave').classList.add('hidden');
-  $id('mp-track-settings').classList.add('hidden');
+  $id('mp-race-panel').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
   // Re-enable join inputs so the player can join a new room.

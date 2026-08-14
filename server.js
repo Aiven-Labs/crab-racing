@@ -1590,9 +1590,9 @@ async function main() {
 
       // ── update-config: host adjusts race settings while the lobby is open ────
       // Same override shape (and same buildRoomConfig() clamping) as room
-      // creation, just applied after the fact. Obstacles are rebuilt from the
-      // room's existing seed so the track stays deterministic for everyone —
-      // only its length/composition can change, not which race this becomes.
+      // creation, just applied after the fact. msg.seed follows the same
+      // convention as 'join': a non-blank custom seed is used as-is, blank picks
+      // a fresh random one (re-rolling the track) — see the 'join' handler above.
       if (msg.type === 'update-config') {
         const info = clients.get(ws);
         if (!info) return;
@@ -1606,12 +1606,15 @@ async function main() {
           sendTo(ws, { type: 'error', msg: 'Race settings are locked — the match already started' });
           return;
         }
+        const seedRaw = (msg.seed != null && String(msg.seed).trim()) ? String(msg.seed).trim() : '';
+        const newSeed = seedRaw ? seedRaw.slice(0, 32) : (Math.floor(Math.random() * 0xffffffff)).toString();
         room.config = buildRoomConfig(msg.config);
-        const { obstacles, map } = buildObstacles(room.seed, room.config);
+        room.seed = newSeed;
+        const { obstacles, map } = buildObstacles(newSeed, room.config);
         room.obstacles = obstacles;
         room.obsMap = map;
         broadcast(info.roomId, { type: 'config-updated', config: configForClient(room.config), seed: room.seed });
-        console.log(`[room:${info.roomId}] host updated race settings`);
+        console.log(`[room:${info.roomId}] host updated race settings (seed ${newSeed})`);
         return;
       }
 
