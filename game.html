@@ -550,6 +550,28 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
            timer is running. Disappears once a second player arrives. -->
       <div id="solo-autoclose-notice" class="hidden"></div>
       <div id="player-list"></div>
+      <!-- Race settings for the room, shown once you're in a lobby (see 'joined').
+           The host can edit track length + which obstacles appear and push the
+           change to everyone with "Update settings"; other players see the same
+           panel read-only. No density field here — buildRoomConfig() never
+           accepts a density override server-side (solo/local-only tunable), so
+           it's excluded rather than shown but silently ignored. Reuses
+           buildObstacleToggles()'s idPrefix support, mirroring the map editor's
+           'ed' prefix — see readMultiConfig()/syncMultiSettingsPanel(). -->
+      <details id="mp-track-settings" class="hidden">
+        <summary>Race settings</summary>
+        <div class="ts-body">
+          <div class="ts-field">
+            <label for="mp-cfg-length">Track length</label>
+            <input class="field" id="mp-cfg-length" type="number" min="10" max="200">
+          </div>
+          <label>Obstacles</label>
+          <div id="mp-cfg-obstacles"><!-- checkboxes built by buildObstacleToggles() --></div>
+          <!-- Host-only: pushes the panel's current values to the room. Hidden
+               for non-hosts and while the lobby is locked/racing. -->
+          <button class="pill hidden" id="btn-update-settings" type="button">Update settings</button>
+        </div>
+      </details>
       <!-- Shown to the lobby host once 2+ players are in, so they can start the
            race before the lobby's join window elapses. -->
       <button id="btn-start" class="pill hidden">Start Match</button>
@@ -1081,6 +1103,59 @@ function readLobbyConfig() {
   return cfg;
 }
 
+// Read the multiplayer lobby's race-settings panel (#mp-track-settings).
+// Returns { trackLength?, obstacleKinds } — same override shape buildRoomConfig()
+// takes, minus obstacleDensity (server-only-ignored, so not offered here at all).
+// Unlike readLobbyConfig(), trackLength is never omitted: the panel is always
+// pre-filled with the room's current length by syncMultiSettingsPanel(), so
+// "untouched" already means "send back what's active", not "inherit default".
+function readMultiConfig() {
+  const cfg = {};
+  const lenRaw = $id('mp-cfg-length').value.trim();
+  if (lenRaw !== '') cfg.trackLength = Number(lenRaw);
+  const checked = ALL_OBSTACLE_KINDS
+    .filter(k => { const box = $id('mp-cfg-ob-' + k.type); return box && box.checked; })
+    .map(k => k.type);
+  cfg.obstacleKinds = checked;
+  return cfg;
+}
+
+// Populate the multiplayer race-settings panel from the room's currently-active
+// config (globals already updated by applyGameConfig()), and refresh who's
+// allowed to edit it. Called after 'joined' / 'config-updated' / 'room-reset',
+// and after any host handoff — every player always sees the room's real
+// settings, but only the host can change them.
+function syncMultiSettingsPanel() {
+  $id('mp-cfg-length').value = String(TOTAL_CELLS);
+  const active = new Set(OBSTACLE_KINDS.map(k => k.type));
+  buildObstacleToggles('mp-cfg-obstacles', 'mp-cfg');
+  ALL_OBSTACLE_KINDS.forEach(k => {
+    const box = $id('mp-cfg-ob-' + k.type);
+    if (box) box.checked = active.has(k.type);
+  });
+  updateMultiSettingsAccess();
+}
+
+// Reveal/lock the settings panel: visible to everyone once in a lobby, but only
+// editable by the host, and only while the lobby is still open (not locked /
+// counting down / racing).
+function updateMultiSettingsAccess() {
+  $id('mp-track-settings').classList.remove('hidden');
+  const editable = isHost && !lobbyLocked;
+  $id('mp-cfg-length').disabled = !editable;
+  $id('mp-cfg-obstacles').querySelectorAll('input').forEach(b => { b.disabled = !editable; });
+  $id('btn-update-settings').classList.toggle('hidden', !editable);
+}
+
+// Host clicked "Update settings" — push the panel's current values to the room.
+// The server re-clamps/filters them exactly like room creation and rebroadcasts
+// the result (see 'config-updated'), so every player (including us) ends up in
+// sync even if the server had to adjust something we sent.
+function updateMultiSettings() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !isHost) return;
+  ws.send(JSON.stringify({ type: 'update-config', config: readMultiConfig() }));
+}
+
 const OBSTACLE_LABELS = { rock: 'Rock', hole: 'Hole', jelly: 'Jelly', beach: 'Beach', net: 'Net' };
 
 // Build the obstacle on/off checkboxes from the current default kinds into
@@ -1302,6 +1377,7 @@ function handleServerMsg(msg) {
       if (isHost && msg.soloAutocloseMs > 0) startSoloAutocloseCountdown(msg.soloAutocloseMs);
       $id('btn-leave').classList.remove('hidden');
       $id('btn-room-link').classList.remove('hidden');
+      syncMultiSettingsPanel();
       break;
     case 'player-joined':
       setStatus(`${msg.players.length} player(s) ready`);
@@ -1314,16 +1390,28 @@ function handleServerMsg(msg) {
       // The previous host left; we may have been promoted.
       isHost = msg.hostId === myPlayerId;
       updateStartButton(currentPlayerCount());
+      updateMultiSettingsAccess();
+      break;
+    case 'config-updated':
+      // The host changed a race setting — re-apply the (server-clamped) config
+      // and rebuild obstacles from the same seed so the preview track everyone
+      // sees stays in sync before the race even starts.
+      if (msg.config) applyGameConfig(msg.config);
+      if (msg.seed != null) buildObstacles(msg.seed);
+      syncMultiSettingsPanel();
+      setStatus('Host updated the race settings');
       break;
     case 'lobby-locked':
       lobbyLocked = true;
       setStatus('Lobby locked — waiting for host to start…');
       updateStartButton(msg.players ? msg.players.length : currentPlayerCount());
+      updateMultiSettingsAccess();
       break;
     case 'countdown':
       lobbyLocked = true;
       updateStartButton(0);
       setStatus(`Starting in ${msg.count}…`);
+      updateMultiSettingsAccess();
       break;
     case 'go':
       // Destroy any leftover Phaser game (e.g. the post-race panel from a prior
@@ -1370,6 +1458,7 @@ function handleServerMsg(msg) {
       setStatus(isHost
         ? 'Race over — click Start Match to race again'
         : 'Race over — waiting for host to start a new race…');
+      syncMultiSettingsPanel();
       break;
     case 'player-left':
       if (gameScene) {
@@ -1396,6 +1485,7 @@ function handleServerMsg(msg) {
       isHost     = false;
       $id('btn-leave').classList.add('hidden');
       $id('btn-room-link').classList.add('hidden');
+      $id('mp-track-settings').classList.add('hidden');
       break;
     case 'player-disconnected':
       if (!gameScene && msg.players) {
@@ -1437,6 +1527,7 @@ function handleServerMsg(msg) {
         setStatus(isHost
           ? 'Reconnected — click Start Match to race'
           : 'Reconnected — waiting for host…');
+        syncMultiSettingsPanel();
       }
       // If raceInProgress but gameScene is null the race started while we were
       // disconnected; nothing to render yet — the server will send 'go' again
@@ -1988,6 +2079,7 @@ function goHome() {
   showMenuView('main'); // fully left the room/race — back to the mode-select menu
   $id('btn-start').classList.add('hidden');
   $id('btn-leave').classList.add('hidden');
+  $id('mp-track-settings').classList.add('hidden');
   setStatus('Enter a name & room, then Join');
   $id('player-list').innerHTML = '';
   // Re-enable join inputs so the player can join a new room.
@@ -2025,6 +2117,7 @@ $id('seed-code').addEventListener('input', updateSoloPreview);
 $id('btn-solo').onclick  = startSolo;
 $id('btn-multi').onclick = joinMulti;
 $id('btn-start').onclick = startMatch;
+$id('btn-update-settings').onclick = updateMultiSettings;
 
 // "Challenge a friend": copy a #challenge= link for the seed + track settings
 // currently shown in the Solo Race preview. Same copy-feedback pattern as the
@@ -2988,6 +3081,7 @@ class RaceScene extends Phaser.Scene {
       const sx = p.cell * CELLR + CELLR/2;
       const sy = trackTop + p.lane * CELLR + CELLR/2;
       const spr = this.add.sprite(sx, sy, key).setFrame(0).setScale(RES);
+      spr._targetX = sx; spr._targetY = sy; // last intended tween destination — see applyServerState
       const lbl = this.add.text(sx, sy - 10 * RES, p.name, {
         fontFamily: 'monospace', fontSize: fs(9),
         color: PALETTE_HEX[p.colorIdx], stroke: '#05080F', strokeThickness: 3,
@@ -3054,8 +3148,9 @@ class RaceScene extends Phaser.Scene {
       const lbl = this.playerLabels?.get(myPlayerId);
       const tx  = nc * CELLR + CELLR / 2;
       const ty  = this.trackTop + nl * CELLR + CELLR / 2;
+      spr._targetX = tx; spr._targetY = ty; // see applyServerState's use of this
       this.tweens.killTweensOf(spr);
-      if (dx !== 0) spr.play('walk_' + (this.myMultiColorIdx | 0), true);
+      if (dx !== 0 || dlane !== 0) spr.play('walk_' + (this.myMultiColorIdx | 0), true);
       this.tweens.add({
         targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',
         onUpdate:  () => lbl?.setPosition(spr.x, spr.y - 10 * RES),
@@ -3175,7 +3270,7 @@ class RaceScene extends Phaser.Scene {
       this.inputBlockedUntil = Date.now() + 1800;
     }
 
-    if (dx !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
+    if (dx !== 0 || dlane !== 0) this.crab.play('walk_' + (this.soloColorIdx | 0), true);
     this.refreshHUD();
 
     this.tweens.killTweensOf(this.crab);
@@ -3289,7 +3384,17 @@ class RaceScene extends Phaser.Scene {
         const tx = p.cell * CELLR + CELLR/2;
         const ty = this.trackTop + p.lane * CELLR + CELLR/2;
 
-        if (Math.abs(spr.x - tx) > 0.5 || Math.abs(spr.y - ty) > 0.5) {
+        // Compare against the last *intended* destination (spr._targetX/Y),
+        // not the sprite's current mid-tween x/y. This broadcast fires on
+        // every move by anyone in the room, so on a routine tick p's own
+        // target hasn't changed — only the mover's has. Comparing against
+        // spr.x/y instead (its old behaviour) was almost always "true" for
+        // any sprite currently mid-tween (it's between old and new cell by
+        // definition), so every other player's crab got its tween killed
+        // and restarted from scratch on every unrelated broadcast — the
+        // rubber-banding/stutter this fixes.
+        if (Math.abs((spr._targetX ?? spr.x) - tx) > 0.5 || Math.abs((spr._targetY ?? spr.y) - ty) > 0.5) {
+          spr._targetX = tx; spr._targetY = ty;
           this.tweens.killTweensOf(spr);
           this.tweens.add({
             targets: spr, x: tx, y: ty, duration: 150, ease: 'Linear',

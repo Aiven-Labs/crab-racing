@@ -880,6 +880,16 @@ async function loadRace(raceId) {
 const rooms   = new Map(); // roomId → Room
 const clients = new Map(); // ws     → { playerId, roomId, name }
 
+// Per-connection move serialization: 'move' messages for the same socket
+// each run their own async handler, and that handler awaits a real Valkey
+// round trip (rateLimit) before applying. Two rapid taps can otherwise
+// interleave across that await — whichever's Valkey response lands first
+// applies first — reordering same-player moves and producing a visible
+// snap-back when the delayed, out-of-order confirmation lands. Chaining
+// each move onto the previous one's promise (see the 'move' handler below)
+// guarantees a player's own moves apply in send order.
+const moveChains = new Map(); // ws → Promise (tail of this connection's move chain)
+
 // Reconnect tokens: token (UUID) → { playerId, roomId, timer }
 // Issued to each player at join time; a client that reconnects within
 // GRACE_PERIOD_MS can resume their slot without a full rejoin.
@@ -1388,6 +1398,63 @@ async function main() {
     return result;
   }
 
+  // Validate, apply, and durably log one 'move' message. Split out from the
+  // WS handler so moveChains (above) can serialize calls per-connection —
+  // this is the async body that used to interleave across the rateLimit
+  // await when two moves arrived back-to-back on the same socket.
+  async function handleMove(info, msg) {
+    // Flood guard: drop moves once a player exceeds the per-second ceiling.
+    // Silent drop (no error) — a legit fast tapper just loses the overflow.
+    if (!await rateLimit(`rl:move:${info.playerId}`, RL_MOVE_LIMIT, RL_MOVE_WINDOW_SECS)) return;
+
+    // A move only counts once the race is live; that's also when raceId
+    // exists. No race → nothing to key on, so drop it (matches applyMove,
+    // which rejects moves before the race starts).
+    const room = rooms.get(info.roomId);
+    if (!room || !room.raceId) return;
+
+    // Validate move magnitude: each move must be exactly one step in at
+    // most one axis. Legal values for dx and dlane are each in {-1, 0, 1}
+    // and the two deltas must not both be non-zero (no diagonals).
+    // Reject anything outside this set — a client sending dx:1000 would
+    // skip straight to the finish line and bypass every obstacle.
+    const dx    = Number.isInteger(msg.dx)    ? msg.dx    : 0;
+    const dlane = Number.isInteger(msg.dlane) ? msg.dlane : 0;
+    if (dx < -1 || dx > 1 || dlane < -1 || dlane > 1) {
+      console.warn(`[move] rejected out-of-range delta from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+      return;
+    }
+    if (dx !== 0 && dlane !== 0) {
+      console.warn(`[move] rejected diagonal move from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+      return;
+    }
+
+    // Apply the move and broadcast the result to the room right now — see
+    // applyAndBroadcastMove's comment for why this is no longer routed
+    // through Kafka first.
+    applyAndBroadcastMove(room, info.roomId, info.playerId, dx, dlane, room.raceId);
+
+    // Publish to Kafka keyed on raceId so all of one race's moves share a
+    // partition (→ total order for that race) and consecutive races in the
+    // same room stay separable. raceId also rides in the value for replay.
+    // Fire-and-forget: this is a durable log for loadRaceFromKafka/replay,
+    // not on the live-gameplay critical path above.
+    producer.send({
+      topic: TOPIC,
+      messages: [{
+        key:   room.raceId,
+        value: JSON.stringify({
+          action:   'move',
+          raceId:   room.raceId,
+          roomId:   info.roomId,
+          playerId: info.playerId,
+          dx, dlane,
+          ts: Date.now(),
+        }),
+      }],
+    }).catch(err => console.error('[kafka] produce error:', err.message));
+  }
+
   // ── HTTP + WebSocket server ────────────────────────────────────────────────────
   const server = http.createServer(serveStatic);
 
@@ -1511,56 +1578,40 @@ async function main() {
         const info = clients.get(ws);
         if (!info) return;
 
-        // Flood guard: drop moves once a player exceeds the per-second ceiling.
-        // Silent drop (no error) — a legit fast tapper just loses the overflow.
-        if (!await rateLimit(`rl:move:${info.playerId}`, RL_MOVE_LIMIT, RL_MOVE_WINDOW_SECS)) return;
+        // Chain onto this connection's previous move — see moveChains' comment.
+        // Swallow rejections on the chain tail itself (not inside handleMove)
+        // so one failed move can't wedge every move after it.
+        const prevChain = moveChains.get(ws) || Promise.resolve();
+        const thisChain = prevChain.then(() => handleMove(info, msg));
+        moveChains.set(ws, thisChain.catch(() => {}));
+        await thisChain;
+        return;
+      }
 
-        // A move only counts once the race is live; that's also when raceId
-        // exists. No race → nothing to key on, so drop it (matches applyMove,
-        // which rejects moves before the race starts).
+      // ── update-config: host adjusts race settings while the lobby is open ────
+      // Same override shape (and same buildRoomConfig() clamping) as room
+      // creation, just applied after the fact. Obstacles are rebuilt from the
+      // room's existing seed so the track stays deterministic for everyone —
+      // only its length/composition can change, not which race this becomes.
+      if (msg.type === 'update-config') {
+        const info = clients.get(ws);
+        if (!info) return;
         const room = rooms.get(info.roomId);
-        if (!room || !room.raceId) return;
-
-        // Validate move magnitude: each move must be exactly one step in at
-        // most one axis. Legal values for dx and dlane are each in {-1, 0, 1}
-        // and the two deltas must not both be non-zero (no diagonals).
-        // Reject anything outside this set — a client sending dx:1000 would
-        // skip straight to the finish line and bypass every obstacle.
-        const dx    = Number.isInteger(msg.dx)    ? msg.dx    : 0;
-        const dlane = Number.isInteger(msg.dlane) ? msg.dlane : 0;
-        if (dx < -1 || dx > 1 || dlane < -1 || dlane > 1) {
-          console.warn(`[move] rejected out-of-range delta from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+        if (!room) return;
+        if (info.playerId !== room.hostId) {
+          sendTo(ws, { type: 'error', msg: 'Only the lobby host can change race settings' });
           return;
         }
-        if (dx !== 0 && dlane !== 0) {
-          console.warn(`[move] rejected diagonal move from ${info.playerId}: dx=${dx} dlane=${dlane}`);
+        if (room.started || room.locked) {
+          sendTo(ws, { type: 'error', msg: 'Race settings are locked — the match already started' });
           return;
         }
-
-        // Apply the move and broadcast the result to the room right now — see
-        // applyAndBroadcastMove's comment for why this is no longer routed
-        // through Kafka first.
-        applyAndBroadcastMove(room, info.roomId, info.playerId, dx, dlane, room.raceId);
-
-        // Publish to Kafka keyed on raceId so all of one race's moves share a
-        // partition (→ total order for that race) and consecutive races in the
-        // same room stay separable. raceId also rides in the value for replay.
-        // Fire-and-forget: this is a durable log for loadRaceFromKafka/replay,
-        // not on the live-gameplay critical path above.
-        producer.send({
-          topic: TOPIC,
-          messages: [{
-            key:   room.raceId,
-            value: JSON.stringify({
-              action:   'move',
-              raceId:   room.raceId,
-              roomId:   info.roomId,
-              playerId: info.playerId,
-              dx, dlane,
-              ts: Date.now(),
-            }),
-          }],
-        }).catch(err => console.error('[kafka] produce error:', err.message));
+        room.config = buildRoomConfig(msg.config);
+        const { obstacles, map } = buildObstacles(room.seed, room.config);
+        room.obstacles = obstacles;
+        room.obsMap = map;
+        broadcast(info.roomId, { type: 'config-updated', config: configForClient(room.config), seed: room.seed });
+        console.log(`[room:${info.roomId}] host updated race settings`);
         return;
       }
 
@@ -1775,6 +1826,7 @@ async function main() {
           }
         }
         clients.delete(ws);
+        moveChains.delete(ws);
         console.log(`[ws] ${info.name} disconnected`);
       }
     });
