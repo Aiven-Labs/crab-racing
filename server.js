@@ -23,6 +23,7 @@ const WebSocket = require('ws');
 const { Kafka } = require('kafkajs');
 const Valkey    = require('iovalkey');
 const { Pool }  = require('pg');
+const events    = require('./events');
 
 const MIME = {
   '.html': 'text/html',
@@ -205,6 +206,9 @@ function serveStatic(req, res) {
     return;
   }
 
+  // Events (sourced from the leaderboard service) + marketing consent — see events.js.
+  if (events.handle(req, res, route)) return;
+
   // Daily challenge ghost — POST saves a completed run's inputs; GET returns
   // the top ghosts for a given date so new players can race against them.
   if (route === '/daily-ghost') {
@@ -222,7 +226,9 @@ function serveStatic(req, res) {
   // traversal past the containment check below.
   let urlPath;
   try {
-    urlPath = route === '/' ? '/game.html' : decodeURIComponent(route);
+    urlPath = route === '/' ? '/game.html'
+            : route === '/events' || /^\/event\/[a-z0-9][a-z0-9-]{0,62}$/.test(route) ? '/event.html'
+            : decodeURIComponent(route);
   } catch {
     res.writeHead(400); res.end('400 Bad Request'); return; // malformed %-escape
   }
@@ -1024,6 +1030,24 @@ function raceTimeCs(room) {
   return Math.round((Date.now() - room.startedAt) / 10);
 }
 
+/** Re-run a solo input sequence on `seed`'s default track with the same rules
+ *  as applyMove (and game.html's _soloStep, which recorded it). Used to verify
+ *  event runs before posting them: the client's claimed finish isn't trusted.
+ *  Returns { won, finishedAtMove } — moves after the finish are ignored. */
+function simulateSoloRun(seed, moves) {
+  const config = buildRoomConfig({});
+  const room = makeRoom('sim', seed, config);
+  const p = makePlayer('solo', 'sim', 0, config.lanes);
+  p.lane = Math.floor(config.lanes / 2); // solo crabs start in the middle lane
+  room.players.set(p.id, p);
+  room.startedAt = Date.now();
+  for (let i = 0; i < moves.length; i++) {
+    applyMove(room, p.id, moves[i].dx, moves[i].dlane);
+    if (p.won) return { won: true, finishedAtMove: i + 1 };
+  }
+  return { won: false, finishedAtMove: null };
+}
+
 /** Everyone who's still racing is marked DNF; the race is closed out and a final
  *  results message is broadcast. Idempotent — a second call is a no-op. */
 function endRace(room, roomId) {
@@ -1331,6 +1355,7 @@ async function main() {
     });
     console.log(`✓ Created Kafka topic "${TOPIC}"`);
   }
+  await events.ensureTopic(admin, existingTopics); // marketing-consent
   await admin.disconnect();
 
   // Producer: publishes move events. Fire-and-forget from the WS handler below
@@ -1339,6 +1364,14 @@ async function main() {
   const producer = kafka.producer();
   await producer.connect();
   console.log('✓ Kafka producer connected');
+
+  events.init({
+    producer, rateLimit, sendJson,
+    // Event tracks use the default config, clamped by the same rules as rooms.
+    buildTrack: (overrides) => configForClient(buildRoomConfig(overrides)),
+    valkey: () => valkey,
+    simulateRun: simulateSoloRun,
+  });
 
   // Apply a move to room state and broadcast the result to the room. Called
   // synchronously and immediately from the WS 'move' handler — moves used to

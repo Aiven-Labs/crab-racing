@@ -141,6 +141,7 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
   background: transparent; border: 1px solid var(--brand-yellow); border-radius: 9999px;
   color: var(--brand-yellow);
 }
+#challenge-banner button.hidden { display: none; }
 #challenge-banner button:hover { background: rgba(255,229,94,0.12); }
 .field:disabled, #btn-open-editor:disabled { opacity: 0.5; cursor: not-allowed; }
 #cfg-obstacles label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
@@ -382,6 +383,15 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
 
 /* ── Leaderboards / result rows ────────────────────── */
 .r-lb { margin: 18px 0 4px; text-align: left; }
+.r-event { margin: 16px 0 4px; padding: 12px; border: 1px solid var(--brand-border-strong); border-radius: 8px; text-align: left; }
+.r-event:empty { display: none; }
+.r-event-msg { font-family: var(--mono); font-size: 13px; color: var(--brand-fg-muted); }
+.r-event-msg.good { color: var(--brand-green); }
+.r-event-msg.bad  { color: var(--brand-orange); }
+.r-event-claim { display: inline-block; margin-top: 10px; padding: 8px 14px; border-radius: 9999px;
+                 background: var(--brand-green); color: #000; font-weight: 600; text-decoration: none; }
+.r-event-hint { font-size: 12px; color: var(--brand-fg-muted); margin-top: 6px; }
+.r-event-board { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--brand-green); }
 .r-lb-title {
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--brand-green); margin-bottom: 8px; padding: 0 2px;
@@ -481,7 +491,7 @@ a:hover { color: #7CFC8E; text-decoration: underline; }
            applyChallenge()/setChallengeLock(). Fields stay locked so the
            track can't be quietly loosened while keeping the shared seed. -->
       <div id="challenge-banner" class="hidden">
-        🔗 Challenge track loaded — seed &amp; settings locked.
+        <span id="challenge-banner-text">🔗 Challenge track loaded — seed &amp; settings locked.</span>
         <button id="btn-clear-challenge" type="button">Use my own settings</button>
       </div>
       <details id="seed-section">
@@ -1795,6 +1805,10 @@ async function startSolo() {
     const resp = await fetch(`${leaderboardBase()}/solo-token`);
     if (resp.ok) { const data = await resp.json(); soloToken = data.token ?? null; }
   } catch { /* server unreachable — token stays null; server will fail open */ }
+  // Event track: also get an event race token so the finish can be posted to
+  // the event's leaderboard (verified server-side — see events.js).
+  eventRaceToken = null;
+  if (activeEvent) eventRaceToken = await fetchEventRaceToken(activeEvent.slug);
   $id('lobby').classList.add('hidden');
   startGame(false);
 }
@@ -2150,6 +2164,7 @@ $id('btn-menu-solo').onclick  = () => {
 };
 $id('btn-menu-multi').onclick = () => showMenuView('multi');
 $id('btn-clear-challenge').onclick = () => {
+  if (activeEvent) return; // event tracks can't be unlocked
   setChallengeLock(false);
   updateSoloPreview();
 };
@@ -2496,6 +2511,8 @@ loadServerConfig().then(() => {
   if (soloRec) { $id('btn-home').classList.remove('hidden'); startLocalReplay(soloRec); return; }
   const challengeRec = parseChallengeHash();
   if (challengeRec) { applyChallenge(challengeRec); return; }
+  const eventSlug = parseEventHash();
+  if (eventSlug) { applyEventLink(eventSlug); return; }
   const raceId = new URLSearchParams(location.search).get('replay');
   if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); return; }
   const roomRec = parseRoomParams();
@@ -2702,6 +2719,76 @@ function applyChallenge(rec) {
   updateSoloPreview();
 }
 
+// ─── event links (#event=<slug>) ──────────────────────────────────────────────
+// An admin-created event (see events.js) pins a seed + track that's locked
+// server-side and can never be modified. The link carries only the slug; the
+// seed/track are fetched from the server, so a tampered link can't change them.
+// Loaded through applyChallenge() with the lock forced on and no "use my own
+// settings" escape hatch — leaving means going back to the main menu.
+const EVENT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+function parseEventHash() {
+  const m = /(?:^|&)event=([^&]+)/.exec(location.hash.replace(/^#/, ''));
+  const slug = m ? decodeURIComponent(m[1]).toLowerCase() : '';
+  return EVENT_SLUG_RE.test(slug) ? slug : null;
+}
+
+let activeEvent = null; // the event whose locked track is loaded, or null
+let eventRaceToken = null; // single-use token for posting this run to the event board
+
+async function fetchEventRaceToken(slug) {
+  try {
+    const r = await fetch(`${leaderboardBase()}/api/events/${encodeURIComponent(slug)}/race`, { method: 'POST' });
+    if (r.ok) return (await r.json()).token || null;
+  } catch { /* offline — the race still runs, it just won't be posted */ }
+  return null;
+}
+
+/** Post a finished event run; the server re-simulates it before forwarding. */
+async function submitEventScore(slug, token, moves, finishTimeCs, name) {
+  try {
+    const r = await fetch(`${leaderboardBase()}/api/events/${encodeURIComponent(slug)}/score`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, moves, finishTimeCs, name }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return r.ok ? body : { error: body.error || `HTTP ${r.status}` };
+  } catch { return { error: 'offline' }; }
+}
+
+// Only accept http(s) links from the server before putting them in an href.
+const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+
+function renderEventResult(result) {
+  const el = $id('r-event');
+  if (!el) return;
+  if (!result || result.error) {
+    el.innerHTML = `<div class="r-event-msg bad">Couldn't post to the event leaderboard${result?.error ? ` (${escapeHtml(result.error)})` : ''}.</div>`;
+    return;
+  }
+  const claim = safeUrl(result.claimUrl), board = safeUrl(result.leaderboardUrl);
+  el.innerHTML = `
+    <div class="r-event-msg good">🏁 Posted to ${escapeHtml(result.eventName || 'the event')} leaderboard</div>
+    ${claim ? `<a class="r-event-claim" href="${escapeHtml(claim)}" target="_blank" rel="noopener">Claim your score →</a>
+               <div class="r-event-hint">Add your nickname &amp; email to appear on the board.</div>` : ''}
+    ${board ? `<a class="r-event-board" href="${escapeHtml(board)}" target="_blank" rel="noopener">View leaderboard</a>` : ''}`;
+}
+async function applyEventLink(slug) {
+  let ev;
+  try {
+    const res = await fetch('/api/events/' + encodeURIComponent(slug));
+    if (!res.ok) throw new Error(res.status === 404 ? 'event not found' : 'HTTP ' + res.status);
+    ev = await res.json();
+  } catch (err) {
+    console.warn('[event] could not load', slug, err.message);
+    setStatus(`Couldn't load event "${slug}" (${err.message})`);
+    return;
+  }
+  applyChallenge({ seed: ev.seed, config: ev.track });
+  activeEvent = ev;
+  $id('challenge-banner-text').textContent = `🏁 Event: ${ev.name} — seed ${ev.seed} & track locked by the organiser.`;
+  $id('btn-clear-challenge').classList.add('hidden');
+}
+
 // Lock (or unlock) the seed + track-settings fields. Locked while a
 // #challenge= link is active so the recipient can't keep the shared seed
 // but quietly loosen the density/obstacles/length before racing — which
@@ -2711,6 +2798,12 @@ function applyChallenge(rec) {
 // per-checkbox disabled state each time it's called while locked.
 function setChallengeLock(locked) {
   challengeLocked = locked;
+  if (!locked && activeEvent) {
+    // Leaving an event track — restore the regular challenge banner.
+    activeEvent = null;
+    $id('challenge-banner-text').textContent = '🔗 Challenge track loaded — seed & settings locked.';
+    $id('btn-clear-challenge').classList.remove('hidden');
+  }
   ['cfg-length', 'cfg-density', 'seed-code', 'btn-open-editor'].forEach(id => {
     const el = $id(id);
     if (el) el.disabled = locked;
@@ -3587,6 +3680,14 @@ class RaceScene extends Phaser.Scene {
         }).catch(() => {});
       }
 
+      // Event race: post to the event's leaderboard (once — the token is single-use).
+      this._eventPosting = Boolean(activeEvent && eventRaceToken);
+      if (this._eventPosting) {
+        const evToken = eventRaceToken; eventRaceToken = null;
+        submitEventScore(activeEvent.slug, evToken, soloMoves, this.raceTime, playerName)
+          .then(renderEventResult);
+      }
+
       // Fire-and-forget submit; leaderboard + personal-best updated async once panel is shown.
       submitScore(playerName, this.raceTime, myColorIdx, seedStr, '', token)
         .then(board => {
@@ -3632,6 +3733,12 @@ class RaceScene extends Phaser.Scene {
 
     // Placeholder replaced async once submitScore resolves.
     if (!watching) html += `<div id="r-lb"></div>`;
+    // Event board result (claim link) — filled by renderEventResult.
+    if (!watching && activeEvent) {
+      html += this._eventPosting
+        ? `<div id="r-event" class="r-event"><div class="r-event-msg">Posting to the event leaderboard…</div></div>`
+        : `<div id="r-event" class="r-event"><div class="r-event-msg bad">Practice run — not posted (event scoring unavailable).</div></div>`;
+    }
 
     html += `<div class="r-actions">`;
     if (!watching) html += `<button id="r-share">Share replay</button>`;
@@ -3675,8 +3782,15 @@ class RaceScene extends Phaser.Scene {
     // (e.g. the Share button) never reaches this canvas-level listener.
     if (!watching) {
       this.time.delayedCall(400, () => {
-        this.input.on('pointerdown', () => this.scene.restart());
-        this.input.keyboard.once('keydown-SPACE', () => this.scene.restart());
+        const again = async () => {
+          if (this._restarting) return;
+          this._restarting = true;
+          // Each event run needs its own single-use token.
+          if (activeEvent) eventRaceToken = await fetchEventRaceToken(activeEvent.slug);
+          this.scene.restart();
+        };
+        this.input.on('pointerdown', again);
+        this.input.keyboard.once('keydown-SPACE', again);
       });
     }
   }

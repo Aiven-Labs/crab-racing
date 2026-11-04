@@ -15,19 +15,33 @@
 # Requires: fnox, curl, python3. Usage: ./scripts/check-valkey-memory.sh
 set -euo pipefail
 
-PROM_URL="${PROM_URL:-http://localhost:9090}"
+# Prometheus has no published port (see docker-compose.yml), so by default we
+# query it from inside its own container. Set PROM_URL to hit a reachable
+# Prometheus over HTTP instead (e.g. one running elsewhere).
+PROM_URL="${PROM_URL:-}"
 APPRISE_BASE="${APPRISE_BASE:-https://apprise.kjaymiller.dev}"
 THRESHOLD="${THRESHOLD:-75}"                 # notify when available% <= this
 RENOTIFY_SECS="${RENOTIFY_SECS:-10800}"      # re-notify at most every 3h while firing
 STATE_FILE="${STATE_FILE:-/tmp/crab-valkey-mem.state}"
 QUERY='mem_available_percent{job="aivenmetrics"}'
 
+prom_query() {  # $1 = PromQL; prints the raw JSON response
+  if [ -n "$PROM_URL" ]; then
+    curl -s -m 10 --get "$PROM_URL/api/v1/query" --data-urlencode "query=$1"
+  else
+    local q
+    q="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1")"
+    docker compose -f "$(dirname "$0")/../docker-compose.yml" exec -T prometheus \
+      wget -q -T 10 -O - "http://localhost:9090/api/v1/query?query=$q"
+  fi
+}
+
 for bin in fnox curl python3; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found on PATH" >&2; exit 1; }
 done
 
 # ── Query Prometheus for the current available-memory percentage ─────────────
-avail="$(curl -s -m 10 --get "$PROM_URL/api/v1/query" --data-urlencode "query=$QUERY" \
+avail="$(prom_query "$QUERY" \
   | python3 -c "import sys,json;r=json.load(sys.stdin)['data']['result'];print(r[0]['value'][1] if r else '')")"
 
 if [ -z "$avail" ]; then

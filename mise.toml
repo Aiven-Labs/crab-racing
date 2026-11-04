@@ -1,0 +1,142 @@
+[tools]
+node = "22.22.3"
+
+[env]
+# Where the events/consent tasks point. Override per run, e.g.
+#   CRAB_URL=https://<your-app>.aiven.app mise run events
+CRAB_URL = "{{ get_env(name='CRAB_URL', default='http://localhost:3000') }}"
+
+# ── setup ──────────────────────────────────────────────────────────────────────
+[tasks.install]
+description = "Install npm dependencies"
+run = "npm install"
+sources = ["package.json", "package-lock.json"]
+outputs = ["node_modules/.package-lock.json"]
+
+[tasks."secrets:update"]
+description = "Fetch Aiven Kafka/Valkey credentials into fnox.toml"
+run = "./scripts/update-env.sh"
+
+[tasks."secrets:check"]
+description = "Check all fnox secrets resolve"
+run = "fnox check"
+
+# ── run ────────────────────────────────────────────────────────────────────────
+[tasks.dev]
+description = "Run the server against Aiven (secrets from fnox), restarting on change"
+depends = ["install"]
+run = "fnox exec -- node --watch server.js"
+
+[tasks.start]
+description = "Run the server against Aiven (secrets from fnox)"
+depends = ["install"]
+run = "fnox exec -- node server.js"
+
+[tasks.up]
+description = "Start the full local stack (server, Kafka, Valkey, Postgres, nginx) in Docker"
+run = "docker compose up --build -d server web"
+
+[tasks.down]
+description = "Stop the local Docker stack"
+run = "docker compose down"
+
+[tasks.logs]
+description = "Follow the local Docker server's logs"
+run = "docker compose logs -f server"
+
+# Backing services have no host ports (internal Docker network) — these exec in.
+[tasks."db:psql"]
+description = "psql into the local Postgres container"
+run = "docker compose exec postgres psql -U crab crabrace"
+
+[tasks."valkey:cli"]
+description = "valkey-cli into the local Valkey container"
+run = "docker compose exec valkey valkey-cli"
+
+[tasks."kafka:topics"]
+description = "List topics on the local Kafka container"
+run = "docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
+
+[tasks."kafka:consent"]
+description = "Tail marketing-consent on the local Kafka container"
+usage = 'flag "--from-beginning" help="Replay the whole topic"'
+run = '''
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic "${MARKETING_TOPIC:-marketing-consent}" \
+  $([ "${usage_from_beginning:-false}" = true ] && echo --from-beginning)
+'''
+
+[tasks.ports]
+description = "Show which local stack ports are published to the host"
+run = "docker compose ps --format 'table {{ '{{' }}.Service{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}'"
+
+# ── test ───────────────────────────────────────────────────────────────────────
+[tasks.test]
+description = "Run the Playwright e2e suite (starts docker compose if needed)"
+depends = ["install"]
+run = "npx playwright test"
+
+[tasks.check]
+description = "Syntax-check the server code"
+run = [
+  "node --check server.js",
+  "node --check events.js",
+  "node --check scripts/consent-tail.js",
+]
+
+# ── events + marketing consent ─────────────────────────────────────────────────
+[tasks.events]
+description = "List events (from the leaderboard service) with their locked seeds"
+run = '''
+curl -fsS "$CRAB_URL/api/events" | node -e '
+  const evs = JSON.parse(require("fs").readFileSync(0));
+  for (const e of evs) console.log(e.slug.padEnd(20), e.seed.padEnd(28), e.name);
+'
+'''
+
+[tasks."event:open"]
+description = "Open an event's consent page in the browser"
+usage = 'arg "<slug>" help="Event slug, e.g. wjax-2026"'
+run = 'open "$CRAB_URL/event/$usage_slug"'
+
+[tasks."consent:test"]
+description = "Submit a test consent record for an event"
+usage = '''
+arg "<slug>" help="Event slug"
+arg "<email>"
+flag "--opt-out" help="Record an opt-out instead of an opt-in"
+'''
+run = '''
+optin=true; [ "${usage_opt_out:-false}" = "true" ] && optin=false
+curl -sS -w '\n[%{http_code}]\n' -X POST "$CRAB_URL/api/events/$usage_slug/consent" \
+  -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$usage_email\",\"marketingOptIn\":$optin,\"consentText\":\"mise consent:test\"}"
+'''
+
+[tasks."leaderboard:token"]
+description = "Store the leaderboard game token (crab-racing) in fnox"
+run = '''
+echo "Paste the lbk_… game token from the leaderboard admin console (API tab), then Enter:"
+read -rs token && printf '%s\n' "$token" | fnox set LEADERBOARD_TOKEN && echo "✓ LEADERBOARD_TOKEN stored"
+'''
+
+[tasks."consent:tail"]
+description = "Tail the marketing-consent topic on Aiven Kafka (secrets from fnox)"
+usage = 'flag "--from-beginning" help="Replay the whole topic"'
+depends = ["install"]
+run = '''
+fnox exec -- node scripts/consent-tail.js ${usage_from_beginning:+$([ "$usage_from_beginning" = true ] && echo --from-beginning)}
+'''
+
+# ── monitoring ─────────────────────────────────────────────────────────────────
+[tasks."prometheus:setup"]
+description = "Rotate Prometheus scrape creds and render prometheus/prometheus.yml"
+run = "./scripts/setup-prometheus.sh"
+
+[tasks."prometheus:up"]
+description = "Start local Prometheus, internal-only (run prometheus:setup first)"
+run = "docker compose up -d prometheus"
+
+[tasks."valkey:memory"]
+description = "Check crab-race-valkey memory and alert Signal if low"
+run = "./scripts/check-valkey-memory.sh"

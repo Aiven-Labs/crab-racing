@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crab Racing — Events</title>
+<style>
+@font-face { font-family: 'Funnel Display'; src: url('/_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/FunnelDisplay-ExtraBold.ttf') format('truetype'); font-weight: 800; font-display: swap; }
+@font-face { font-family: 'Inter'; src: url('/_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/Inter-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Inter'; src: url('/_ds/aiven-design-system-b513cbfb-5293-42fa-98be-531d71fa666f/fonts/Inter-SemiBold.ttf') format('truetype'); font-weight: 600; font-display: swap; }
+:root {
+  --bg: #05080F; --card: #11151F; --fg: #FFFFFF; --muted: #9AA1AF;
+  --border: #1F2430; --green: #5FFA74; --red: #F85149;
+  --sans: 'Inter', system-ui, sans-serif; --display: 'Funnel Display', 'Inter', sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); }
+main { max-width: 640px; margin: 0 auto; padding: 48px 20px; }
+h1 { font-family: var(--display); font-weight: 800; font-size: 40px; margin: 0 0 8px; }
+.sub { color: var(--muted); margin: 0 0 28px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.card h2 { margin: 0 0 4px; font-size: 20px; }
+.card a.title { color: var(--fg); text-decoration: none; }
+.meta { color: var(--muted); font-size: 14px; }
+a.race { display: inline-block; margin: 20px 0 0; padding: 10px 18px; border-radius: 8px;
+         background: var(--green); color: #000; font-weight: 600; text-decoration: none; }
+form { display: grid; gap: 12px; }
+input[type=email] { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+                    background: var(--bg); color: var(--fg); font: inherit; }
+label.optin { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.4; }
+label.optin input { margin-top: 3px; accent-color: var(--green); }
+button { justify-self: start; padding: 10px 18px; border: 1px solid var(--green); border-radius: 8px;
+         background: transparent; color: var(--green); font-weight: 600; cursor: pointer; font: inherit; }
+button:disabled { opacity: .5; cursor: default; }
+.fine { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+.msg { font-size: 14px; min-height: 1em; }
+.msg.ok { color: var(--green); } .msg.err { color: var(--red); }
+.empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<main id="main"><p class="empty">Loading…</p></main>
+
+<template id="tpl-event">
+  <h1></h1>
+  <p class="sub meta"></p>
+  <div class="card">
+    <h2>Stay in the loop</h2>
+    <p class="fine" style="margin-bottom:14px">Get news about Aiven and future events.</p>
+    <form>
+      <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
+      <!-- Unchecked by default: consent must be an active choice. -->
+      <label class="optin"><input type="checkbox" name="optin">
+        <span class="consent-text">Yes, Aiven may email me about products, news and events. I can unsubscribe at any time.</span></label>
+      <button type="submit">Save my preference</button>
+      <div class="msg" role="status"></div>
+      <p class="fine">Submitting with the box unticked records that you do not want marketing email.</p>
+    </form>
+  </div>
+  <a class="race" href="#">🦀 Race the event track →</a>
+  <p class="fine" style="margin-top:10px">Everyone at this event races the same locked track.</p>
+</template>
+
+<script>
+const main = document.getElementById('main');
+const slug = (location.pathname.match(/^\/event\/([a-z0-9][a-z0-9-]{0,62})$/) || [])[1] || null;
+
+const fmt = (iso) => new Date(iso.endsWith('Z') || /[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z')
+  .toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const when = (ev) => ev.startsAt && ev.endsAt ? `${fmt(ev.startsAt)} – ${fmt(ev.endsAt)}`
+  : ev.startsAt ? `From ${fmt(ev.startsAt)}` : 'Open now';
+const el = (tag, props) => Object.assign(document.createElement(tag), props);
+const fail = (text) => main.replaceChildren(el('p', { className: 'empty', textContent: text }));
+
+async function getJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status === 404 ? 'Event not found.' : 'Events are unavailable right now.');
+  return r.json();
+}
+
+function renderEvent(ev) {
+  document.title = `${ev.name} — Crab Racing`;
+  const node = document.getElementById('tpl-event').content.cloneNode(true);
+  node.querySelector('h1').textContent = ev.name;
+  node.querySelector('.sub').textContent = when(ev);
+  node.querySelector('.race').href = '/#event=' + encodeURIComponent(ev.slug);
+
+  const form = node.querySelector('form');
+  const msg = form.querySelector('.msg');
+  const btn = form.querySelector('button');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true; msg.className = 'msg'; msg.textContent = '';
+    const optIn = form.optin.checked;
+    try {
+      const r = await fetch(`/api/events/${encodeURIComponent(ev.slug)}/consent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: form.email.value,
+          marketingOptIn: optIn,
+          consentText: form.querySelector('.consent-text').textContent.trim(),
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      msg.className = 'msg ok';
+      msg.textContent = optIn ? "Thanks — you're subscribed. 🦀" : "Got it — we won't send you marketing email.";
+      form.reset();
+    } catch (err) {
+      msg.className = 'msg err'; msg.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  main.replaceChildren(node);
+}
+
+function renderList(events) {
+  const items = events.map(ev => {
+    const card = el('div', { className: 'card' });
+    const h2 = el('h2');
+    h2.append(el('a', { className: 'title', href: '/event/' + ev.slug, textContent: ev.name }));
+    card.append(h2, el('div', { className: 'meta', textContent: when(ev) }));
+    return card;
+  });
+  main.replaceChildren(el('h1', { textContent: 'Events' }),
+    ...(items.length ? items : [el('p', { className: 'empty', textContent: 'No events right now.' })]));
+}
+
+(slug ? getJson('/api/events/' + slug).then(renderEvent) : getJson('/api/events').then(renderList))
+  .catch(err => fail(err.message));
+</script>
+</body>
+</html>
