@@ -83,7 +83,7 @@ function renderEvent(ev) {
   const node = document.getElementById('tpl-event').content.cloneNode(true);
   node.querySelector('h1').textContent = ev.name;
   node.querySelector('.sub').textContent = when(ev);
-  node.querySelector('.race').href = '/#event=' + encodeURIComponent(ev.slug);
+  node.querySelector('.race').href = '/?event=' + encodeURIComponent(ev.slug);
 
   const form = node.querySelector('form');
   const msg = form.querySelector('.msg');

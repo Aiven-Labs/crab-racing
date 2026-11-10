@@ -35,7 +35,7 @@
  *   POST /api/events/:slug/consent   { email, marketingOptIn }
  * Pages:
  *   /event/:slug                     consent form + "race the event track" (event.html)
- *   /#event=:slug                    game.html with the event's locked seed
+ *   /?event=:slug                    game.html with the event's locked seed (#event= also works)
  */
 const crypto = require('crypto');
 

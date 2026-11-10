@@ -2504,6 +2504,7 @@ $id('editor-modal').addEventListener('click', e => { if (e.target.id === 'editor
 // challenger's track, instead of the plain lobby. Three link forms:
 //   #replay=<data>     portable solo replay, decoded + played locally (any instance)
 //   #challenge=<data>  Solo Race seed + track settings — see applyChallenge()
+//   ?event=<slug>      event's locked track, scored to its board — see applyEventLink()
 //   ?replay=<raceId>   server-recorded race, streamed back via the watch handler
 //   ?room=<roomId>     multiplayer room invite — see applyRoomLink()
 loadServerConfig().then(() => {
@@ -2511,7 +2512,7 @@ loadServerConfig().then(() => {
   if (soloRec) { $id('btn-home').classList.remove('hidden'); startLocalReplay(soloRec); return; }
   const challengeRec = parseChallengeHash();
   if (challengeRec) { applyChallenge(challengeRec); return; }
-  const eventSlug = parseEventHash();
+  const eventSlug = parseEventLink();
   if (eventSlug) { applyEventLink(eventSlug); return; }
   const raceId = new URLSearchParams(location.search).get('replay');
   if (raceId) { $id('btn-home').classList.remove('hidden'); startReplay(raceId); return; }
@@ -2719,16 +2720,22 @@ function applyChallenge(rec) {
   updateSoloPreview();
 }
 
-// ─── event links (#event=<slug>) ──────────────────────────────────────────────
+// ─── event links (?event=<slug>) ──────────────────────────────────────────────
 // An admin-created event (see events.js) pins a seed + track that's locked
 // server-side and can never be modified. The link carries only the slug; the
 // seed/track are fetched from the server, so a tampered link can't change them.
 // Loaded through applyChallenge() with the lock forced on and no "use my own
 // settings" escape hatch — leaving means going back to the main menu.
 const EVENT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
-function parseEventHash() {
-  const m = /(?:^|&)event=([^&]+)/.exec(location.hash.replace(/^#/, ''));
-  const slug = m ? decodeURIComponent(m[1]).toLowerCase() : '';
+// Canonical form is ?event=<slug>; the older #event=<slug> still works so
+// links already printed on posters/QR codes keep loading the event.
+function parseEventLink() {
+  let slug = new URLSearchParams(location.search).get('event') || '';
+  if (!slug) {
+    const m = /(?:^|&)event=([^&]+)/.exec(location.hash.replace(/^#/, ''));
+    try { slug = m ? decodeURIComponent(m[1]) : ''; } catch { slug = ''; }
+  }
+  slug = slug.toLowerCase();
   return EVENT_SLUG_RE.test(slug) ? slug : null;
 }
 
