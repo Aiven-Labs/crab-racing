@@ -40,7 +40,7 @@
 const crypto = require('crypto');
 
 const LEADERBOARD_URL = (process.env.LEADERBOARD_URL
-  || 'https://01a05854-246f-72dd-ad6c-5f8d943b130d-8000.eur-1.aiven.app').replace(/\/+$/, '');
+  || 'https://01a1c5d8-10ba-7615-bcdb-557ec417a581-8000.eur-1.aiven.app').replace(/\/+$/, '');
 const LEADERBOARD_TOKEN = process.env.LEADERBOARD_TOKEN || '';
 const LEADERBOARD_GAME  = process.env.LEADERBOARD_GAME || 'crab-racing';
 const MARKETING_TOPIC = process.env.MARKETING_TOPIC || 'marketing-consent';
@@ -76,7 +76,12 @@ async function fetchEvents() {
   if (!res.ok) throw new Error(`leaderboard /api/events HTTP ${res.status}`);
   const body = await res.json();
   const list = Array.isArray(body?.events) ? body.events : [];
-  return list.filter(e => SLUG_RE.test(String(e.slug || ''))).map(e => ({
+  return list
+    .filter(e => SLUG_RE.test(String(e.slug || '')))
+    // The service hosts several games' events; only race the ones that include
+    // ours (an event without a games list is treated as open to every game).
+    .filter(e => !Array.isArray(e.games) || e.games.includes(LEADERBOARD_GAME))
+    .map(e => ({
     slug:     e.slug,
     name:     String(e.name || e.slug),
     startsAt: e.starts_at || null, // UTC, may be null = always open

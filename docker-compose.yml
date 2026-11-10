@@ -53,6 +53,7 @@ services:
       POSTGRES_URI: postgresql://crab:racing@postgres:5432/crabrace
       # Posts event race times to the leaderboard service (see .env.example).
       LEADERBOARD_TOKEN: ${LEADERBOARD_TOKEN:-}
+      LEADERBOARD_URL: ${LEADERBOARD_URL:-}
     depends_on:
       kafka:
         condition: service_healthy

@@ -34,7 +34,10 @@ run = "fnox exec -- node server.js"
 
 [tasks.up]
 description = "Start the full local stack (server, Kafka, Valkey, Postgres, nginx) in Docker"
-run = "docker compose up --build -d server web"
+# fnox exec so compose can interpolate LEADERBOARD_TOKEN / LEADERBOARD_URL;
+# compose only reads the vars docker-compose.yml names, so the Aiven creds
+# fnox also exports are ignored (the local stack uses its own containers).
+run = "fnox exec -- docker compose up --build -d server web"
 
 [tasks.down]
 description = "Stop the local Docker stack"
