@@ -1,9 +1,9 @@
 {
   "_comment": "Single source of truth for the race track. server.js loads this at startup; the browser fetches the same file on load. Both derive the identical track from it, so client and server always agree (essential for multiplayer). Edit here to tune a custom game — no code changes needed. Opening game.html directly off the filesystem (file://) falls back to the defaults baked into game.html.",
 
-  "lanes": 3,
+  "lanes": 6,
 
-  "obstacleDensity": 0.78,
+  "obstacleDensity": 0.5
   "obstacleStartCell": 4,
 
   "dnfTimeoutSecs": 15,
