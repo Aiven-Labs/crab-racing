@@ -1,19 +1,18 @@
 {
-  "_comment": "Example track config. Copy this to game-config.json and edit to tune a custom game — no code changes needed. server.js loads game-config.json at startup and the browser fetches the same file on load, so client and server always derive the identical track (essential for multiplayer). If game-config.json is absent, both fall back to the defaults baked into the code (which match this file). Opening game.html straight off the filesystem (file://) can't fetch it and always uses the baked-in defaults.",
+  "_comment": "Single source of truth for the race track. server.js loads this at startup; the browser fetches the same file on load. Both derive the identical track from it, so client and server always agree (essential for multiplayer). Edit here to tune a custom game — no code changes needed. Opening game.html directly off the filesystem (file://) falls back to the defaults baked into game.html.",
 
   "lanes": 3,
 
-  "obstacleDensity": 0.38,
-  "obstacleStartCell": 6,
+  "obstacleDensity": 0.78,
+  "obstacleStartCell": 4,
 
-  "_dnf_comment": "Seconds the rest of the field gets to finish after the first crab crosses the line. When it elapses the race ends and any crab still going is recorded DNF. Clamped server-side to 3–120.",
   "dnfTimeoutSecs": 15,
 
   "zones": [
     { "tile": "shore",       "len": 5  },
     { "tile": "wetSand",     "len": 8  },
-    { "tile": "drySand",     "len": 12 },
-    { "tile": "undergrowth", "len": 10 },
+    { "tile": "drySand",     "len": 24 },
+    { "tile": "undergrowth", "len": 20 },
     { "tile": "treeline",    "len": 8  },
     { "tile": "finish",      "len": 3  }
   ],
